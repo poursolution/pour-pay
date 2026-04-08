@@ -6394,18 +6394,79 @@ function renderMgrSiteInfo(site, sm) {
     `;
 }
 
+/* ── 이전 달 투입인원 자동 인계 공통 헬퍼 ──
+   해당 현장/소장/월에 투입 기록이 없으면 직전 달에서 자동 복사.
+   투입인원 탭과 노임신고 탭 모두에서 호출. */
+function ensureWorkersForMonth(siteId, mgrId, currentKey) {
+    if (!data.workers) data.workers = [];
+    const already = data.workers.filter(w => w.siteId === siteId && w.mgrId === mgrId && w.yearMonth === currentKey);
+    if (already.length > 0) return; // 이미 있으면 아무것도 안함
+
+    const [y, m] = currentKey.split('-').map(Number);
+    const prevMonth = m === 1 ? 12 : m - 1;
+    const prevYear  = m === 1 ? y - 1 : y;
+    const prevKey   = prevYear + '-' + String(prevMonth).padStart(2, '0');
+    const prevWorkers = data.workers.filter(w => w.siteId === siteId && w.mgrId === mgrId && w.yearMonth === prevKey);
+    if (!prevWorkers.length) return;
+
+    const base = Date.now();
+    prevWorkers.forEach((pw, i) => {
+        data.workers.push({
+            id:        'wk_' + (base + i),
+            siteId:    pw.siteId,
+            yearMonth: currentKey,
+            mgrId:     pw.mgrId,
+            tmId:      pw.tmId,
+            name:      pw.name,
+            phone:     pw.phone || '',
+            wage:      pw.wage  || 200000
+        });
+    });
+    saveData(); // 백그라운드 저장
+}
+
 /* 소장님 > 투입인원 탭 */
 function renderMgrSiteWorkers(site, sm) {
-    const workers = (data.workers || []).filter(w => w.siteId === site.id && w.mgrId === currentUser.id);
+    const year = mgrAttYear, month = mgrAttMonth;
+    const monthStr = String(month).padStart(2, '0');
+    const currentKey = year + '-' + monthStr;
+    if (!data.workers) data.workers = [];
+
+    // 이전 달 인원 자동 인계 (공통 함수)
+    ensureWorkersForMonth(site.id, currentUser.id, currentKey);
+
+    // 이번 달 투입 인원 조회
+    let workers = data.workers.filter(w => w.siteId === site.id && w.mgrId === currentUser.id && w.yearMonth === currentKey);
+
     const myTeams = data.teamMembers.filter(t => t.mgrId === currentUser.id);
     const available = myTeams.filter(t => !workers.find(w => w.tmId === t.id));
+
+    // 전달 인계 여부 확인 (안내 표시용)
+    const prevMonth2 = month === 1 ? 12 : month - 1;
+    const prevYear2  = month === 1 ? year - 1 : year;
+    const prevKey2   = prevYear2 + '-' + String(prevMonth2).padStart(2, '0');
+    const inheritedFromPrev = workers.length > 0 &&
+        workers.every(w => {
+            // 이 달 첫 진입으로 자동 복사된 경우 확인: 이전 달에 같은 tmId가 있음
+            return data.workers.some(pw => pw.siteId === site.id && pw.mgrId === currentUser.id && pw.yearMonth === prevKey2 && pw.tmId === w.tmId);
+        });
 
     return `
         <div class="card">
             <div class="card-header">
                 <div class="card-title">👥 투입인원 (${workers.length}명)</div>
-                ${available.length ? `<button class="btn btn-success btn-sm" onclick="openMgrWorkerSelect('${site.id}')">+ 팀원 투입</button>` : ''}
+                <div style="display:flex; align-items:center; gap:6px;">
+                    <button class="btn btn-outline btn-sm" onclick="mgrAttMonth--; if(mgrAttMonth<1){mgrAttMonth=12;mgrAttYear--;} renderManagerView();">◀</button>
+                    <span style="font-weight:600; font-size:13px;">${year}.${monthStr}</span>
+                    <button class="btn btn-outline btn-sm" onclick="mgrAttMonth++; if(mgrAttMonth>12){mgrAttMonth=1;mgrAttYear++;} renderManagerView();">▶</button>
+                    ${available.length ? `<button class="btn btn-success btn-sm" onclick="openMgrWorkerSelect('${site.id}')">+ 팀원 투입</button>` : ''}
+                </div>
             </div>
+
+            ${workers.length > 0 && inheritedFromPrev ? `
+            <div style="padding:8px 12px; background:#f0fdf4; border:1px solid #a7f3d0; border-radius:6px; font-size:12px; color:#065f46; margin-bottom:8px;">
+                📋 ${prevYear2}.${String(prevMonth2).padStart(2,'0')} 인원이 자동으로 인계되었습니다. 이번 달 변경은 이전 달에 영향을 주지 않습니다.
+            </div>` : ''}
 
             ${workers.length ? workers.map(w => {
                 const tm = w.tmId ? data.teamMembers.find(t => t.id === w.tmId) : null;
@@ -6437,11 +6498,16 @@ function renderMgrSiteWorkers(site, sm) {
 
 /* 소장님 > 노임신고 탭 */
 function renderMgrSiteAttendance(site, sm) {
-    const workers = (data.workers || []).filter(w => w.siteId === site.id && w.mgrId === currentUser.id);
     const year = mgrAttYear, month = mgrAttMonth;
     const monthStr = String(month).padStart(2, '0');
     const lastDay = new Date(year, month, 0).getDate();
     const currentKey = year + '-' + monthStr;
+
+    // 이전 달 인원 자동 인계 (투입인원 탭을 거치지 않고 노임신고 탭을 바로 열어도 작동)
+    ensureWorkersForMonth(site.id, currentUser.id, currentKey);
+
+    // 이 월에 투입된 작업자 (인계된 인원 포함)
+    const workers = (data.workers || []).filter(w => w.siteId === site.id && w.mgrId === currentUser.id && w.yearMonth === currentKey);
     const monthAtt = site.attendance?.[currentKey] || {};
     const locked = isAttendanceLocked(year, month);
     const deadlineMonth = month === 12 ? 1 : month + 1;
@@ -6580,7 +6646,10 @@ function renderMgrSiteAttendance(site, sm) {
                 <div style="font-size:13px; font-weight:700; color:#DC2626; margin-bottom:4px;">⚠️ 주의사항</div>
                 <div style="font-size:12px; color:#92400E; line-height:1.6;">위 4대보험 발생 여부는 <b>예상 표기</b>이며, 실제 적용은 신고 기준에 따라 다를 수 있습니다.</div>
             </div>
-            ` : '<div class="empty">투입인원 탭에서 팀원을 먼저 투입해주세요.</div>'}
+            ` : `<div class="empty" style="padding:20px; text-align:center;">
+                <div style="font-size:14px; font-weight:600; color:var(--text-light); margin-bottom:8px;">📋 ${year}.${monthStr} 투입 인원 없음</div>
+                <div style="font-size:12px; color:var(--text-light);">← 투입인원 탭에서 이 달의 팀원을 투입해주세요.</div>
+            </div>`}
         </div>
     `;
 }
@@ -6779,7 +6848,8 @@ function refreshAttendanceTotals(siteId) {
     const currentKey = mgrAttYear + '-' + String(mgrAttMonth).padStart(2, '0');
     const monthAtt = s.attendance?.[currentKey] || {};
     const lastDay = new Date(mgrAttYear, mgrAttMonth, 0).getDate();
-    const workers = (data.workers || []).filter(w => w.siteId === siteId && w.mgrId === currentUser.id);
+    // 월별 독립: 이 월의 작업자만 집계
+    const workers = (data.workers || []).filter(w => w.siteId === siteId && w.mgrId === currentUser.id && w.yearMonth === currentKey);
 
     const days1 = [];
     for (let d = 1; d <= Math.min(15, lastDay); d++) days1.push(d);
@@ -6867,14 +6937,15 @@ function updateWorkerWageMgr(workerId, value) {
 }
 
 function openMgrWorkerSelect(siteId) {
+    const currentKey = mgrAttYear + '-' + String(mgrAttMonth).padStart(2, '0');
     const myTeams = data.teamMembers.filter(t => t.mgrId === currentUser.id);
-    const existingWorkers = (data.workers || []).filter(w => w.siteId === siteId && w.mgrId === currentUser.id);
+    const existingWorkers = (data.workers || []).filter(w => w.siteId === siteId && w.mgrId === currentUser.id && w.yearMonth === currentKey);
     const available = myTeams.filter(t => !existingWorkers.find(w => w.tmId === t.id));
     if (!available.length) { toast('투입 가능한 팀원이 없습니다'); return; }
     // 전체 투입
     available.forEach((tm, i) => {
         if (!data.workers) data.workers = [];
-        data.workers.push({id:'wk_'+Date.now()+'_'+i, siteId, mgrId:currentUser.id, tmId:tm.id, name:tm.name, phone:tm.phone||'', wage:tm.wage||200000});
+        data.workers.push({id:'wk_'+Date.now()+'_'+i, siteId, yearMonth: currentKey, mgrId:currentUser.id, tmId:tm.id, name:tm.name, phone:tm.phone||'', wage:tm.wage||200000});
     });
     renderManagerView();
     saveData(); // 백그라운드 저장
@@ -6884,8 +6955,9 @@ function openMgrWorkerSelect(siteId) {
 function addWorkerMgrDirect(siteId, tmId) {
     const tm = data.teamMembers.find(t => t.id === tmId);
     if (!tm) return;
+    const currentKey = mgrAttYear + '-' + String(mgrAttMonth).padStart(2, '0');
     if (!data.workers) data.workers = [];
-    data.workers.push({id:'wk_'+Date.now(), siteId, mgrId:currentUser.id, tmId:tm.id, name:tm.name, phone:tm.phone||'', wage:tm.wage||200000});
+    data.workers.push({id:'wk_'+Date.now(), siteId, yearMonth: currentKey, mgrId:currentUser.id, tmId:tm.id, name:tm.name, phone:tm.phone||'', wage:tm.wage||200000});
     renderManagerView();
     saveData(); // 백그라운드 저장
     toast(tm.name + ' 투입 완료');
@@ -6993,7 +7065,9 @@ window.addEventListener('beforeunload', (e) => {
         return e.returnValue;
     }
 });
-console.log('v8.5 시작 - 새 Firebase 프로젝트(pour-pay) 이전');
+console.log('v8.6 시작 - 노임관리 월별 독립 수정 (yearMonth per worker)');
+// 월별 독립 마이그레이션: yearMonth 없는 기존 작업자 레코드 정리
+// (레거시 데이터는 화면에 표시되지 않도록 처리 — yearMonth 필터에서 자동 제외됨)
 </script>
 </body>
 </html>
