@@ -2557,7 +2557,29 @@ function openSiteDetail(id, keepTab = false) {
     showTab('siteDetail');
     
     const assigns = data.siteManagers.filter(sm => sm.siteId === id);
-    const workers = (data.workers || []).filter(w => w.siteId === id);
+    const _adminMonthStr = String(attendanceMonth).padStart(2, '0');
+    const _adminCurrentKey = `${attendanceYear}-${_adminMonthStr}`;
+    const workers = (() => {
+        const all = (data.workers || []).filter(w => w.siteId === id);
+        // 이달 레코드 우선
+        const thisMonth = all.filter(w => w.yearMonth === _adminCurrentKey);
+        const legacy    = all.filter(w => !w.yearMonth);
+        // 이달 레코드에 이미 있는 tmId·name은 레거시에서 제외
+        const thisMonthTmIds = new Set(thisMonth.map(w => w.tmId).filter(Boolean));
+        const thisMonthNames = new Set(thisMonth.map(w => w.name).filter(Boolean));
+        const legacyFallback = legacy.filter(w =>
+            (!w.tmId || !thisMonthTmIds.has(w.tmId)) && !thisMonthNames.has(w.name)
+        );
+        const merged = [...thisMonth, ...legacyFallback];
+        // 최종 tmId 기준 중복 제거
+        const seen = new Set();
+        return merged.filter(w => {
+            const k = w.tmId || w.name || w.id;
+            if (seen.has(k)) return false;
+            seen.add(k);
+            return true;
+        });
+    })();
     
     // 시공사 정기결제일 정보 조회
     const contractor = data.contractors.find(c => c.name === s.contractor);
@@ -4852,7 +4874,9 @@ async function saveWorker() {
     const tm = tmId ? data.teamMembers.find(t => t.id === tmId) : null;
     
     if (!data.workers) data.workers = [];
-    data.workers.push({ id: 'wk_' + Date.now(), siteId: currentSiteId, mgrId: document.getElementById('workerMgr').value, tmId, name, phone: document.getElementById('workerPhone').value, wage: tm?.wage || 200000 });
+    const _saveMonthStr = String(attendanceMonth).padStart(2, '0');
+    const _saveCurrentKey = `${attendanceYear}-${_saveMonthStr}`;
+    data.workers.push({ id: 'wk_' + Date.now(), siteId: currentSiteId, yearMonth: _saveCurrentKey, mgrId: document.getElementById('workerMgr').value, tmId, name, phone: document.getElementById('workerPhone').value, wage: tm?.wage || 200000 });
     
     await saveData();
     toast('추가완료');
