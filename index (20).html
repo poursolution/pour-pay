@@ -2561,11 +2561,16 @@ function openSiteDetail(id, keepTab = false) {
     const _adminCurrentKey = `${attendanceYear}-${_adminMonthStr}`;
     const workers = (() => {
         const all = (data.workers || []).filter(w => w.siteId === id);
-        // yearMonth가 있는 레코드는 현재 월만, 없는 건 구버전 호환으로 통과
-        const filtered = all.filter(w => !w.yearMonth || w.yearMonth === _adminCurrentKey);
-        // tmId 기준 중복 제거 (동일 팀원 중복 투입 방지)
+        // 이달 레코드 우선, 없으면 yearMonth 없는 구버전 레코드 폴백
+        const thisMonth = all.filter(w => w.yearMonth === _adminCurrentKey);
+        const legacy    = all.filter(w => !w.yearMonth);
+        // tmId 기준으로 이달 레코드가 없는 경우에만 구버전 레코드 보충
+        const thisMonthTmIds = new Set(thisMonth.map(w => w.tmId).filter(Boolean));
+        const legacyFallback = legacy.filter(w => !w.tmId || !thisMonthTmIds.has(w.tmId));
+        const merged = [...thisMonth, ...legacyFallback];
+        // 최종 tmId 기준 중복 제거 (이달 레코드가 앞에 있으므로 이달 것이 우선)
         const seen = new Set();
-        return filtered.filter(w => {
+        return merged.filter(w => {
             const k = w.tmId || w.id;
             if (seen.has(k)) return false;
             seen.add(k);
