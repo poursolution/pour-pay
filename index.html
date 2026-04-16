@@ -5479,13 +5479,19 @@ function downloadManagerLaborExcel() {
 /* 노무비대장 엑셀 다운로드 (ExcelJS 서식 적용) */
 async function downloadAttendanceExcel(siteId) {
     const s = data.sites.find(x => x.id === siteId);
-    const workers = (data.workers || []).filter(w => w.siteId === siteId);
-    if (!workers.length) { toast('작업자 없음'); return; }
 
     const year = attendanceYear, month = attendanceMonth;
     const monthStr = String(month).padStart(2, '0');
     const lastDay = new Date(year, month, 0).getDate();
     const currentKey = `${year}-${monthStr}`;
+
+    // yearMonth 필터: 현재 조회 월 작업자만 포함 (레거시 미설정 레코드는 제외)
+    let workers = (data.workers || []).filter(w => w.siteId === siteId && w.yearMonth === currentKey);
+    if (!workers.length) {
+        // 레거시(yearMonth 없는) 데이터 fallback
+        workers = (data.workers || []).filter(w => w.siteId === siteId && !w.yearMonth);
+    }
+    if (!workers.length) { toast('작업자 없음'); return; }
     const monthAtt = s?.attendance?.[currentKey] || {};
 
     const wb = new ExcelJS.Workbook();
@@ -5658,10 +5664,15 @@ async function downloadAttendanceExcel(siteId) {
     toast('노무비대장 다운로드 완료');
 }
 
-/* 작업자 PDF 다운로드 (수정4) */
 async function downloadWorkerPDF(siteId) {
     const s = data.sites.find(x => x.id === siteId);
-    const workers = (data.workers || []).filter(w => w.siteId === siteId);
+    const _pdYear = attendanceYear, _pdMonth = attendanceMonth;
+    const _pdKey = `${_pdYear}-${String(_pdMonth).padStart(2,'0')}`;
+    // yearMonth 필터: 현재 조회 월 작업자만 포함
+    let workers = (data.workers || []).filter(w => w.siteId === siteId && w.yearMonth === _pdKey);
+    if (!workers.length) {
+        workers = (data.workers || []).filter(w => w.siteId === siteId && !w.yearMonth);
+    }
     if (!workers.length) { toast('작업자 없음'); return; }
     
     toast('PDF 생성중... 이미지 로딩 포함');
