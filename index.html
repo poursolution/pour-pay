@@ -2401,7 +2401,7 @@ function renderSiteList(sites) {
             <div style="display:flex; align-items:center; gap:12px; flex:1;">
                 <div style="background:${typeBgColor}; color:${typeColor}; padding:8px 12px; border-radius:6px; font-weight:700; font-size:12px; min-width:70px; text-align:center;">${typeLabel}</div>
                 <div class="list-item-info">
-                    <h4 style="font-size:15px; font-weight:700;">${s.name || '-'} ${s.isTechConsulting ? '<span style="display:inline-block; font-size:10px; padding:2px 6px; border-radius:4px; background:#FAEEDA; color:#854F0B; border:0.5px solid #FAC775; font-weight:600; vertical-align:middle;">기술자문</span>' : ''} ${isPaymentCompleted ? '<span style="color:#059669; font-size:11px;">✓완료</span>' : ''}</h4>
+                    <h4 style="font-size:15px; font-weight:700;">${s.name || '-'} ${s.siteType === 'consulting' && s.isTechConsulting ? '<span style="display:inline-block; font-size:10px; padding:2px 6px; border-radius:4px; background:#FAEEDA; color:#854F0B; border:0.5px solid #FAC775; font-weight:600; vertical-align:middle;">기술자문</span>' : ''} ${isPaymentCompleted ? '<span style="color:#059669; font-size:11px;">✓완료</span>' : ''}</h4>
                     <p>📍 ${s.contractor || '-'} | 👷 ${mgrNames || '미배정'}</p>
                 </div>
             </div>
@@ -2545,6 +2545,28 @@ document.addEventListener('click', function(e) {
     }
 });
 
+/* 현장+월의 작업자 목록 (이달 레코드 + 레거시(yearMonth 없는) 레코드 병합·중복 제거)
+   - 화면 노임관리/노무비대장 엑셀/작업자 PDF 모두 이 함수를 사용해 동일한 결과를 보장한다.
+   - tmId가 같거나 이름이 같으면 이달 레코드를 우선하고 레거시는 제외. */
+function getSiteMonthWorkers(siteId, yearMonthKey) {
+    const all = (data.workers || []).filter(w => w.siteId === siteId);
+    const thisMonth = all.filter(w => w.yearMonth === yearMonthKey);
+    const legacy    = all.filter(w => !w.yearMonth);
+    const thisMonthTmIds = new Set(thisMonth.map(w => w.tmId).filter(Boolean));
+    const thisMonthNames = new Set(thisMonth.map(w => w.name).filter(Boolean));
+    const legacyFallback = legacy.filter(w =>
+        (!w.tmId || !thisMonthTmIds.has(w.tmId)) && !thisMonthNames.has(w.name)
+    );
+    const merged = [...thisMonth, ...legacyFallback];
+    const seen = new Set();
+    return merged.filter(w => {
+        const k = w.tmId || w.name || w.id;
+        if (seen.has(k)) return false;
+        seen.add(k);
+        return true;
+    });
+}
+
 /* 현장 상세 */
 function openSiteDetail(id, keepTab = false) {
     currentSiteId = id;
@@ -2559,27 +2581,7 @@ function openSiteDetail(id, keepTab = false) {
     const assigns = data.siteManagers.filter(sm => sm.siteId === id);
     const _adminMonthStr = String(attendanceMonth).padStart(2, '0');
     const _adminCurrentKey = `${attendanceYear}-${_adminMonthStr}`;
-    const workers = (() => {
-        const all = (data.workers || []).filter(w => w.siteId === id);
-        // 이달 레코드 우선
-        const thisMonth = all.filter(w => w.yearMonth === _adminCurrentKey);
-        const legacy    = all.filter(w => !w.yearMonth);
-        // 이달 레코드에 이미 있는 tmId·name은 레거시에서 제외
-        const thisMonthTmIds = new Set(thisMonth.map(w => w.tmId).filter(Boolean));
-        const thisMonthNames = new Set(thisMonth.map(w => w.name).filter(Boolean));
-        const legacyFallback = legacy.filter(w =>
-            (!w.tmId || !thisMonthTmIds.has(w.tmId)) && !thisMonthNames.has(w.name)
-        );
-        const merged = [...thisMonth, ...legacyFallback];
-        // 최종 tmId 기준 중복 제거
-        const seen = new Set();
-        return merged.filter(w => {
-            const k = w.tmId || w.name || w.id;
-            if (seen.has(k)) return false;
-            seen.add(k);
-            return true;
-        });
-    })();
+    const workers = getSiteMonthWorkers(id, _adminCurrentKey);
     
     // 시공사 정기결제일 정보 조회
     const contractor = data.contractors.find(c => c.name === s.contractor);
@@ -5485,12 +5487,8 @@ async function downloadAttendanceExcel(siteId) {
     const lastDay = new Date(year, month, 0).getDate();
     const currentKey = `${year}-${monthStr}`;
 
-    // yearMonth 필터: 현재 조회 월 작업자만 포함 (레거시 미설정 레코드는 제외)
-    let workers = (data.workers || []).filter(w => w.siteId === siteId && w.yearMonth === currentKey);
-    if (!workers.length) {
-        // 레거시(yearMonth 없는) 데이터 fallback
-        workers = (data.workers || []).filter(w => w.siteId === siteId && !w.yearMonth);
-    }
+    // 화면 노임관리와 동일한 작업자 목록 (이달+레거시 병합·중복 제거)
+    const workers = getSiteMonthWorkers(siteId, currentKey);
     if (!workers.length) { toast('작업자 없음'); return; }
     const monthAtt = s?.attendance?.[currentKey] || {};
 
@@ -5636,7 +5634,7 @@ async function downloadAttendanceExcel(siteId) {
         // 합계
         const cG = ws.getCell(row, sumStart); cG.value = gongsu; cG.font = boldFont; cG.alignment = centerAlign; cG.border = thinBorder;
         const cI = ws.getCell(row, sumStart + 1); cI.value = ilsu; cI.font = dataFont; cI.alignment = centerAlign; cI.border = thinBorder;
-        const cW = ws.getCell(row, sumStart + 2); cW.value = wage; cW.font = dataFont; cW.alignment = { horizontal: 'right', vertical: 'middle' }; cW.border = thinBorder; cW.numFmt = '#,##0';
+        // 소득금액 (단가는 이미 5번 컬럼에 출력됨)
         const cA = ws.getCell(row, sumStart + 2); cA.value = amount; cA.font = boldFont; cA.alignment = { horizontal: 'right', vertical: 'middle' }; cA.border = thinBorder; cA.numFmt = '#,##0';
     });
 
@@ -5668,11 +5666,8 @@ async function downloadWorkerPDF(siteId) {
     const s = data.sites.find(x => x.id === siteId);
     const _pdYear = attendanceYear, _pdMonth = attendanceMonth;
     const _pdKey = `${_pdYear}-${String(_pdMonth).padStart(2,'0')}`;
-    // yearMonth 필터: 현재 조회 월 작업자만 포함
-    let workers = (data.workers || []).filter(w => w.siteId === siteId && w.yearMonth === _pdKey);
-    if (!workers.length) {
-        workers = (data.workers || []).filter(w => w.siteId === siteId && !w.yearMonth);
-    }
+    // 화면 노임관리와 동일한 작업자 목록 (이달+레거시 병합·중복 제거)
+    const workers = getSiteMonthWorkers(siteId, _pdKey);
     if (!workers.length) { toast('작업자 없음'); return; }
     
     toast('PDF 생성중... 이미지 로딩 포함');
