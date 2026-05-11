@@ -926,8 +926,13 @@ function loadData() {
         updateSyncStatus('connected', '연결됨');
         renderAll();
         
-        // 분리 저장된 이미지 복원
-        restoreImages();
+        // ⚡ Performance Fix (2026-05-12): 이미지 일괄 복원 제거
+        // 페이지 로드당 741개 이미지 × 약 33KB = 약 24MB 트래픽 폭증의 주범
+        // 이제는 본인(소장) 이미지만 미리 로드, 나머지는 lazy load
+        // restoreImages();  ← 제거됨
+        if (currentUser?.role === 'manager') {
+            restoreUserImages(currentUser.id);
+        }
         
         // 기존 큰 이미지 자동 압축
         compressExistingImages();
@@ -980,7 +985,11 @@ function loadData() {
                 _syncVersion: val._syncVersion
             };
             renderAll();
-            restoreImages();
+            // ⚡ Performance Fix (2026-05-12): 동기화 후 일괄 복원도 제거
+            // restoreImages();  ← 제거됨 (트래픽 폭증 원인)
+            if (currentUser?.role === 'manager') {
+                restoreUserImages(currentUser.id);
+            }
             toast('데이터 동기화됨');
         });
     }).catch(err => {
@@ -1057,6 +1066,53 @@ async function restoreImages() {
     if (tasks.length > 0) {
         await Promise.all(tasks);
         console.log(`이미지 ${tasks.length}개 복원 완료`);
+        renderAll();
+    }
+}
+
+// ⚡ Performance (2026-05-12): 특정 사용자(주로 본인) 이미지만 lazy load
+// restoreImages() 대신 사용. 페이지 로드 시 트래픽을 24MB → 0.2MB로 감소시킴
+// userId가 일치하는 manager 1명의 사업자등록증/통장사본만 로드 (보통 4-6개)
+async function restoreUserImages(userId) {
+    if (!userId) return;
+    const tasks = [];
+    
+    const myMgr = data.managers.find(m => m.id === userId);
+    if (!myMgr?.bizDocs) return;
+    
+    // 기본 사업자 서류
+    for (const docType of ['license', 'bankbook']) {
+        const doc = myMgr.bizDocs[docType];
+        if (doc?.data && typeof doc.data === 'string' && doc.data.startsWith('__IMG__')) {
+            const imgKey = doc.data.replace('__IMG__', '');
+            tasks.push(
+                db.ref('siteImages/' + imgKey).once('value')
+                    .then(snap => { if (snap.val()) doc.data = snap.val(); })
+                    .catch(() => {})
+            );
+        }
+    }
+    
+    // 추가 사업자 서류
+    if (myMgr.additionalBiz?.length) {
+        for (const ab of myMgr.additionalBiz) {
+            for (const docType of ['license', 'bankbook']) {
+                const dataKey = docType + 'Data';
+                if (ab[dataKey] && typeof ab[dataKey] === 'string' && ab[dataKey].startsWith('__IMG__')) {
+                    const imgKey = ab[dataKey].replace('__IMG__', '');
+                    tasks.push(
+                        db.ref('siteImages/' + imgKey).once('value')
+                            .then(snap => { if (snap.val()) ab[dataKey] = snap.val(); })
+                            .catch(() => {})
+                    );
+                }
+            }
+        }
+    }
+    
+    if (tasks.length > 0) {
+        await Promise.all(tasks);
+        console.log(`본인 이미지 ${tasks.length}개 lazy load 완료`);
         renderAll();
     }
 }
@@ -1198,7 +1254,12 @@ async function saveData() {
                         _lastUpdated: val._lastUpdated, _syncVersion: val._syncVersion
                     };
                     console.log('Deferred remote snapshot applied after save');
-                    renderAll(); restoreImages();
+                    renderAll();
+                    // ⚡ Performance Fix (2026-05-12): 일괄 복원 제거
+                    // restoreImages();  ← 제거됨
+                    if (currentUser?.role === 'manager') {
+                        restoreUserImages(currentUser.id);
+                    }
                 }
             }
         }
@@ -1322,6 +1383,9 @@ function enterApp() {
         document.getElementById('adminView').classList.add('hidden');
         document.getElementById('managerView').classList.remove('hidden');
         renderManagerView();
+        // ⚡ Performance Fix (2026-05-12): 소장 본인 이미지 lazy load
+        // (loadData 시점엔 currentUser가 null이므로 여기서 다시 호출)
+        restoreUserImages(currentUser.id);
     } else {
         document.getElementById('adminView').classList.remove('hidden');
         document.getElementById('managerView').classList.add('hidden');
