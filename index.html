@@ -1113,7 +1113,12 @@ async function restoreUserImages(userId) {
     if (tasks.length > 0) {
         await Promise.all(tasks);
         console.log(`본인 이미지 ${tasks.length}개 lazy load 완료`);
-        renderAll();
+        // ⚡ Fix: renderAll()은 manager면 early return하므로 직접 renderManagerView 호출
+        if (currentUser?.role === 'manager') {
+            renderManagerView();
+        } else {
+            renderAll();
+        }
     }
 }
 
