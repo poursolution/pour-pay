@@ -20,6 +20,7 @@
     <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-app-compat.js"></script>
+    <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-auth-compat.js"></script>
     <script src="https://www.gstatic.com/firebasejs/9.22.0/firebase-database-compat.js"></script>
     <style>
         @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+KR:wght@400;500;600;700&display=swap');
@@ -420,15 +421,15 @@
                 <button class="login-tab" onclick="showLoginTab('manager')">소장님</button>
             </div>
             <div id="adminLoginForm" onkeydown="if(event.key==='Enter')loginAdmin()">
-                <div class="login-input-group"><label>아이디</label><input type="text" id="adminId" placeholder="아이디를 입력하세요"></div>
-                <div class="login-input-group"><label>비밀번호</label><input type="password" id="adminPw" placeholder="비밀번호를 입력하세요"></div>
-                <label class="login-remember"><input type="checkbox" id="adminRemember"> 로그인 정보 저장</label>
+                <div class="login-input-group"><label>아이디 (이메일)</label><input type="email" id="adminId" placeholder="예: admin@netformrnd.com" autocomplete="username"></div>
+                <div class="login-input-group"><label>비밀번호</label><input type="password" id="adminPw" placeholder="비밀번호를 입력하세요" autocomplete="current-password"></div>
+                <label class="login-remember" style="display:none"><input type="checkbox" id="adminRemember"> 로그인 정보 저장</label>
                 <button class="login-btn" onclick="loginAdmin()">로그인</button>
             </div>
             <div id="salesLoginForm" class="hidden" onkeydown="if(event.key==='Enter')loginSales()">
-                <div class="login-input-group"><label>아이디</label><input type="text" id="salesId" placeholder="아이디를 입력하세요"></div>
-                <div class="login-input-group"><label>비밀번호</label><input type="password" id="salesPw" placeholder="비밀번호를 입력하세요"></div>
-                <label class="login-remember"><input type="checkbox" id="salesRemember"> 로그인 정보 저장</label>
+                <div class="login-input-group"><label>아이디 (이메일)</label><input type="email" id="salesId" placeholder="예: sales@netformrnd.com" autocomplete="username"></div>
+                <div class="login-input-group"><label>비밀번호</label><input type="password" id="salesPw" placeholder="비밀번호를 입력하세요" autocomplete="current-password"></div>
+                <label class="login-remember" style="display:none"><input type="checkbox" id="salesRemember"> 로그인 정보 저장</label>
                 <button class="login-btn" onclick="loginSales()">로그인</button>
             </div>
             <div id="managerLoginForm" class="hidden" onkeydown="if(event.key==='Enter')loginManager()">
@@ -1310,34 +1311,63 @@ function showLoginTab(type) {
     document.getElementById('managerLoginForm').classList.toggle('hidden', type !== 'manager');
 }
 
-function loginAdmin() {
-    const id = document.getElementById('adminId').value, pw = document.getElementById('adminPw').value;
-    const remember = document.getElementById('adminRemember').checked;
-    if (id === 'netform00' && pw === 'zpzg084895!!') { 
-        currentUser = { id: 'netform00', name: '관리자', role: 'admin' }; 
-        if (remember) {
-            localStorage.setItem('savedLogin', JSON.stringify({ type: 'admin', id, pw }));
-        } else {
-            localStorage.removeItem('savedLogin');
-        }
-        enterApp(); 
+// 🔒 Security Fix (2026-05-13): Firebase Auth로 전환
+// Before: 하드코딩된 ID/PW를 소스에서 직접 비교 (소스 노출 시 비번 노출)
+// After: Firebase 서버에서 인증 (소스에 비번 없음)
+async function loginAdmin() {
+    const id = document.getElementById('adminId').value.trim();
+    const pw = document.getElementById('adminPw').value;
+    
+    if (!id || !pw) {
+        toast('아이디와 비밀번호를 입력하세요');
+        return;
     }
-    else toast('로그인 실패');
+    
+    try {
+        await firebase.auth().signInWithEmailAndPassword(id, pw);
+        currentUser = { id: id, name: '관리자', role: 'admin' };
+        enterApp();
+    } catch (e) {
+        console.error('Login error:', e.code, e.message);
+        if (e.code === 'auth/invalid-credential' 
+            || e.code === 'auth/wrong-password' 
+            || e.code === 'auth/user-not-found'
+            || e.code === 'auth/invalid-email') {
+            toast('로그인 실패: 아이디 또는 비밀번호 확인');
+        } else if (e.code === 'auth/too-many-requests') {
+            toast('로그인 시도 횟수 초과. 잠시 후 다시 시도');
+        } else {
+            toast('로그인 실패: ' + (e.message || '오류'));
+        }
+    }
 }
 
-function loginSales() {
-    const id = document.getElementById('salesId').value, pw = document.getElementById('salesPw').value;
-    const remember = document.getElementById('salesRemember').checked;
-    if (id === 'netform' && pw === 'zpzg084895!') { 
-        currentUser = { id: 'netform', name: '영업사원', role: 'sales' }; 
-        if (remember) {
-            localStorage.setItem('savedLogin', JSON.stringify({ type: 'sales', id, pw }));
-        } else {
-            localStorage.removeItem('savedLogin');
-        }
-        enterApp(); 
+async function loginSales() {
+    const id = document.getElementById('salesId').value.trim();
+    const pw = document.getElementById('salesPw').value;
+    
+    if (!id || !pw) {
+        toast('아이디와 비밀번호를 입력하세요');
+        return;
     }
-    else toast('로그인 실패');
+    
+    try {
+        await firebase.auth().signInWithEmailAndPassword(id, pw);
+        currentUser = { id: id, name: '영업사원', role: 'sales' };
+        enterApp();
+    } catch (e) {
+        console.error('Login error:', e.code, e.message);
+        if (e.code === 'auth/invalid-credential' 
+            || e.code === 'auth/wrong-password' 
+            || e.code === 'auth/user-not-found'
+            || e.code === 'auth/invalid-email') {
+            toast('로그인 실패: 아이디 또는 비밀번호 확인');
+        } else if (e.code === 'auth/too-many-requests') {
+            toast('로그인 시도 횟수 초과. 잠시 후 다시 시도');
+        } else {
+            toast('로그인 실패: ' + (e.message || '오류'));
+        }
+    }
 }
 
 function loginManager() {
@@ -1382,27 +1412,22 @@ function loginManager() {
     }
 }
 
-// 저장된 로그인 정보 불러오기
+// 저장된 로그인 정보 불러오기 (소장만 — admin/sales는 Firebase Auth 자체 세션 사용)
 function loadSavedLogin() {
     try {
         const saved = localStorage.getItem('savedLogin');
         if (saved) {
             const { type, id, pw } = JSON.parse(saved);
-            if (type === 'admin') {
-                document.getElementById('adminId').value = id;
-                document.getElementById('adminPw').value = pw;
-                document.getElementById('adminRemember').checked = true;
-                showLoginTab('admin');
-            } else if (type === 'sales') {
-                document.getElementById('salesId').value = id;
-                document.getElementById('salesPw').value = pw;
-                document.getElementById('salesRemember').checked = true;
-                showLoginTab('sales');
-            } else if (type === 'manager') {
+            // 🔒 Security Fix (2026-05-13): admin/sales는 평문 자동입력 제거 (Firebase Auth로 전환)
+            if (type === 'manager') {
                 document.getElementById('mgrLoginId').value = id;
                 document.getElementById('mgrLoginPw').value = pw;
                 document.getElementById('mgrRemember').checked = true;
                 showLoginTab('manager');
+            }
+            // 이전 admin/sales 저장 데이터가 있으면 정리 (보안)
+            if (type === 'admin' || type === 'sales') {
+                localStorage.removeItem('savedLogin');
             }
         }
     } catch (e) {
@@ -1430,11 +1455,19 @@ function enterApp() {
     toast('로그인 성공!');
 }
 
-function logout() {
+async function logout() {
+    // 🔒 Security Fix (2026-05-13): Firebase Auth 로그아웃 (admin/sales 세션 종료)
+    if (currentUser?.role === 'admin' || currentUser?.role === 'sales') {
+        try {
+            await firebase.auth().signOut();
+        } catch (e) {
+            console.warn('Firebase signOut error:', e);
+        }
+    }
     currentUser = null;
     document.getElementById('mainApp').classList.add('hidden');
     document.getElementById('loginPage').classList.remove('hidden');
-    loadSavedLogin(); // 로그아웃 시 저장된 정보 다시 불러오기
+    loadSavedLogin(); // 로그아웃 시 저장된 정보 다시 불러오기 (소장 자동 입력용)
 }
 
 /* 탭 전환 */
