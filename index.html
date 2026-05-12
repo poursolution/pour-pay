@@ -1313,7 +1313,7 @@ function showLoginTab(type) {
 function loginAdmin() {
     const id = document.getElementById('adminId').value, pw = document.getElementById('adminPw').value;
     const remember = document.getElementById('adminRemember').checked;
-    if (id === 'netform00' && pw === 'zpzg13546!!') { 
+    if (id === 'netform00' && pw === 'zpzg084895!!') { 
         currentUser = { id: 'netform00', name: '관리자', role: 'admin' }; 
         if (remember) {
             localStorage.setItem('savedLogin', JSON.stringify({ type: 'admin', id, pw }));
@@ -1328,7 +1328,7 @@ function loginAdmin() {
 function loginSales() {
     const id = document.getElementById('salesId').value, pw = document.getElementById('salesPw').value;
     const remember = document.getElementById('salesRemember').checked;
-    if (id === 'netform' && pw === 'zpzg13546') { 
+    if (id === 'netform' && pw === 'zpzg084895!') { 
         currentUser = { id: 'netform', name: '영업사원', role: 'sales' }; 
         if (remember) {
             localStorage.setItem('savedLogin', JSON.stringify({ type: 'sales', id, pw }));
