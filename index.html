@@ -899,8 +899,22 @@ function updateSyncStatus(status, text) {
 }
 
 /* Firebase 동기화 */
-function loadData() {
+async function loadData() {
     updateSyncStatus('loading', '로딩중...');
+    
+    // 🔒 Security Step 4 (2026-05-13): 익명 인증 보장 (DB 접근 가능하도록)
+    // Security Rules가 auth != null이므로, 로그인 전 사용자도 익명 인증을 받아야 DB 접근 가능
+    if (!firebase.auth().currentUser) {
+        try {
+            await firebase.auth().signInAnonymously();
+            console.log('Anonymous auth granted');
+        } catch (e) {
+            console.error('Anonymous auth failed:', e);
+            updateSyncStatus('error', '인증 실패');
+            toast('⚠️ 인증 실패 - 페이지를 새로고침 해주세요');
+            return;
+        }
+    }
     
     db.ref('siteData').once('value').then(snapshot => {
         const val = snapshot.val();
@@ -1462,6 +1476,14 @@ async function logout() {
             await firebase.auth().signOut();
         } catch (e) {
             console.warn('Firebase signOut error:', e);
+        }
+    }
+    // 🔒 Security Step 4 (2026-05-13): 로그아웃 후 익명 인증 재시도 (DB 접근 유지)
+    if (!firebase.auth().currentUser) {
+        try {
+            await firebase.auth().signInAnonymously();
+        } catch (e) {
+            console.warn('Anonymous auth retry failed:', e);
         }
     }
     currentUser = null;
