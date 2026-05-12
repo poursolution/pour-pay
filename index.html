@@ -937,60 +937,51 @@ function loadData() {
         // 기존 큰 이미지 자동 압축
         compressExistingImages();
         
-        // 실시간 리스너 설정 (다른 기기에서 변경 시 동기화)
-        db.ref('siteData').on('value', snapshot => {
+        // 실시간 리스너 (다른 기기에서 변경 시 동기화)
+        // ⚡ Performance Fix (2026-05-12): _syncVersion만 감시 → 변경자 정보 확인 → 자기 관련일 때만 데이터 fetch
+        // Before: 누가 한 글자만 바꿔도 siteData 전체(~30MB) × 모든 접속자 다운로드
+        // After:  _syncVersion(수 바이트)만 감시. 관리자/영업사원은 항상 갱신, 소장은 본인 관련만 갱신
+        db.ref('siteData/_syncVersion').on('value', async snap => {
             if (!dataLoaded) return;
-            const val = snapshot.val();
-            if (!val) return;
-
-            // 저장 중이거나 대기 저장 있으면 원격 덮어쓰기 차단 (저장 완료 후 재적용)
-            if (window._isSaving || window._pendingSave) {
-                window._pendingRemoteSnapshot = val;
-                console.log('Sync deferred: local save in progress');
-                return;
-            }
-
-            const remoteTime = val._lastUpdated ? new Date(val._lastUpdated).getTime() : 0;
-            const localTime  = data._lastUpdated ? new Date(data._lastUpdated).getTime() : 0;
-            const remoteVer  = val._syncVersion || 0;
-            const localVer   = data._syncVersion || 0;
-
-            // 타임스탬프·syncVersion 모두 로컬 이하면 무시
-            if (remoteTime <= localTime && remoteVer <= localVer) {
+            if (!currentUser) return;  // 로그인 전이면 무시
+            
+            const newVersion = snap.val() || 0;
+            const localVersion = data._syncVersion || 0;
+            
+            // 새 변경 아님 (또는 자기 저장의 echo) → 무시
+            if (newVersion <= localVersion) {
                 console.log('Sync blocked: remote is not newer');
                 return;
             }
-
-            // 빈 데이터로 덮어쓰기 방지
-            const newTotal = (val.sites||[]).length + (val.managers||[]).length;
-            const curTotal = (data.sites||[]).length + (data.managers||[]).length;
-            if (curTotal > 0 && newTotal === 0) {
-                console.warn('Sync blocked: remote data is empty');
-                return;
+            
+            // 소장: 영향 범위 메타데이터 확인 → 자기 mgrId 관련인지
+            if (currentUser.role === 'manager') {
+                try {
+                    const metaSnap = await db.ref('siteData/_lastChange').once('value');
+                    const meta = metaSnap.val();
+                    const affected = meta?.affectedMgrIds;
+                    const isRelated = (affected === 'all') 
+                        || (Array.isArray(affected) && affected.includes(currentUser.id));
+                    
+                    if (!isRelated) {
+                        // 본인 무관 변경 → 데이터 fetch 스킵 (트래픽 절약 핵심)
+                        console.log(`Sync skipped: change not related to ${currentUser.id}`);
+                        data._syncVersion = newVersion;  // 로컬 버전만 업데이트 (다시 감지 방지)
+                        return;
+                    }
+                } catch (e) {
+                    console.warn('메타데이터 확인 실패, 안전을 위해 전체 갱신:', e);
+                }
             }
-            if (curTotal > 0 && newTotal < curTotal * 0.5) {
-                console.warn('Sync blocked: remote data has significantly fewer records', {remote: newTotal, local: curTotal});
-                return;
+            
+            // 관리자/영업사원 OR 자기 관련 변경인 소장 → 전체 데이터 fetch & 적용
+            try {
+                const fullSnap = await db.ref('siteData').once('value');
+                const val = fullSnap.val();
+                if (val) await applyRemoteData(val);
+            } catch (e) {
+                console.error('Sync fetch error:', e);
             }
-
-            data = {
-                managers: val.managers || [],
-                contractors: val.contractors || [],
-                sites: val.sites || [],
-                teamMembers: val.teamMembers || [],
-                siteManagers: val.siteManagers || [],
-                workers: val.workers || [],
-                attendance: val.attendance || [],
-                _lastUpdated: val._lastUpdated,
-                _syncVersion: val._syncVersion
-            };
-            renderAll();
-            // ⚡ Performance Fix (2026-05-12): 동기화 후 일괄 복원도 제거
-            // restoreImages();  ← 제거됨 (트래픽 폭증 원인)
-            if (currentUser?.role === 'manager') {
-                restoreUserImages(currentUser.id);
-            }
-            toast('데이터 동기화됨');
         });
     }).catch(err => {
         console.error('Firebase load error:', err);
@@ -1122,6 +1113,59 @@ async function restoreUserImages(userId) {
     }
 }
 
+// ⚡ Performance Fix (2026-05-12): 원격 데이터 적용 로직 (리스너에서 분리)
+// _syncVersion 감시 후 자기 관련 변경일 때 호출됨
+async function applyRemoteData(val) {
+    if (!val) return;
+
+    // 저장 중이거나 대기 저장 있으면 원격 덮어쓰기 차단 (저장 완료 후 재적용)
+    if (window._isSaving || window._pendingSave) {
+        window._pendingRemoteSnapshot = val;
+        console.log('Sync deferred: local save in progress');
+        return;
+    }
+
+    const remoteTime = val._lastUpdated ? new Date(val._lastUpdated).getTime() : 0;
+    const localTime  = data._lastUpdated ? new Date(data._lastUpdated).getTime() : 0;
+    const remoteVer  = val._syncVersion || 0;
+    const localVer   = data._syncVersion || 0;
+
+    // 타임스탬프·syncVersion 모두 로컬 이하면 무시
+    if (remoteTime <= localTime && remoteVer <= localVer) {
+        console.log('Sync blocked: remote is not newer');
+        return;
+    }
+
+    // 빈 데이터로 덮어쓰기 방지
+    const newTotal = (val.sites||[]).length + (val.managers||[]).length;
+    const curTotal = (data.sites||[]).length + (data.managers||[]).length;
+    if (curTotal > 0 && newTotal === 0) {
+        console.warn('Sync blocked: remote data is empty');
+        return;
+    }
+    if (curTotal > 0 && newTotal < curTotal * 0.5) {
+        console.warn('Sync blocked: remote data has significantly fewer records', {remote: newTotal, local: curTotal});
+        return;
+    }
+
+    data = {
+        managers: val.managers || [],
+        contractors: val.contractors || [],
+        sites: val.sites || [],
+        teamMembers: val.teamMembers || [],
+        siteManagers: val.siteManagers || [],
+        workers: val.workers || [],
+        attendance: val.attendance || [],
+        _lastUpdated: val._lastUpdated,
+        _syncVersion: val._syncVersion
+    };
+    renderAll();
+    if (currentUser?.role === 'manager') {
+        restoreUserImages(currentUser.id);
+    }
+    toast('데이터 동기화됨');
+}
+
 async function saveData() {
     if (!dataLoaded) {
         console.warn('Save blocked: data not loaded yet');
@@ -1160,6 +1204,16 @@ async function saveData() {
         updateSyncStatus('syncing', '저장중...');
         data._lastUpdated = new Date().toISOString();
         data._syncVersion = (data._syncVersion || 0) + 1;
+        
+        // ⚡ Performance Fix (2026-05-12): 변경 영향 범위 메타데이터
+        // 소장 본인 변경 → 본인 mgrId만 영향
+        // 관리자/영업사원 변경 → 'all' (전체 영향, 안전한 기본값)
+        // 리스너가 이 정보로 자기 관련 변경인지 판단 → 무관하면 데이터 fetch 스킵 (트래픽 절감)
+        data._lastChange = {
+            affectedMgrIds: currentUser?.role === 'manager' ? [currentUser.id] : 'all',
+            changedBy: currentUser?.id || 'unknown',
+            timestamp: Date.now()
+        };
 
         const imageRefs = [];
         const dataClone = JSON.parse(JSON.stringify(data));
@@ -1240,33 +1294,10 @@ async function saveData() {
             window._pendingSave = false;
             setTimeout(() => saveData(), 0);
         } else if (window._pendingRemoteSnapshot) {
-            // 저장 중 차단됐던 원격 데이터 이제 적용
+            // 저장 중 차단됐던 원격 데이터 이제 적용 (applyRemoteData로 일관 처리)
             const val = window._pendingRemoteSnapshot;
             window._pendingRemoteSnapshot = null;
-            const remoteTime = val._lastUpdated ? new Date(val._lastUpdated).getTime() : 0;
-            const localTime  = data._lastUpdated ? new Date(data._lastUpdated).getTime() : 0;
-            const remoteVer  = val._syncVersion || 0;
-            const localVer   = data._syncVersion || 0;
-            if (remoteTime > localTime || remoteVer > localVer) {
-                const newTotal = (val.sites||[]).length + (val.managers||[]).length;
-                const curTotal = (data.sites||[]).length + (data.managers||[]).length;
-                if (!(curTotal > 0 && newTotal < curTotal * 0.5)) {
-                    data = {
-                        managers: val.managers || [], contractors: val.contractors || [],
-                        sites: val.sites || [], teamMembers: val.teamMembers || [],
-                        siteManagers: val.siteManagers || [], workers: val.workers || [],
-                        attendance: val.attendance || [],
-                        _lastUpdated: val._lastUpdated, _syncVersion: val._syncVersion
-                    };
-                    console.log('Deferred remote snapshot applied after save');
-                    renderAll();
-                    // ⚡ Performance Fix (2026-05-12): 일괄 복원 제거
-                    // restoreImages();  ← 제거됨
-                    if (currentUser?.role === 'manager') {
-                        restoreUserImages(currentUser.id);
-                    }
-                }
-            }
+            await applyRemoteData(val);
         }
     }
 }
