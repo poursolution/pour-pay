@@ -2854,7 +2854,7 @@ function renderSiteInfoTab(s, assigns) {
                 <div style="font-size:11px; font-weight:600; color:#0369a1; margin-bottom:8px;">💵 금액 현황</div>
                 <div style="display:grid; grid-template-columns:repeat(3, 1fr); gap:6px; text-align:center;">
                     <div style="padding:8px 4px; background:white; border-radius:6px;"><div style="font-size:10px; color:var(--text-light);">총 공사금액</div><div style="font-size:13px; font-weight:700; color:#1d4ed8; white-space:nowrap;">${formatMoney(s.totalAmount)}</div></div>
-                    <div style="padding:8px 4px; background:white; border-radius:6px;"><div style="font-size:10px; color:var(--text-light);">컨설팅 총액</div><div style="font-size:13px; font-weight:700; color:#059669; white-space:nowrap;">${formatMoney(s.consultingTotal)}</div></div>
+                    <div style="padding:8px 4px; background:white; border-radius:6px;"><div style="font-size:10px; color:var(--text-light);">컨설팅 총액</div><div style="font-size:13px; font-weight:700; color:${s.consultingTotal < 0 ? '#dc2626' : '#059669'}; white-space:nowrap;">${formatMoney(s.consultingTotal)}</div></div>
                     <div style="padding:8px 4px; background:white; border-radius:6px;"><div style="font-size:10px; color:var(--text-light);">노무비 총액</div><div style="font-size:13px; font-weight:700; color:#b45309; white-space:nowrap;">${formatMoney(s.totalLabor)}</div></div>
                 </div>
             </div>
@@ -3311,13 +3311,13 @@ function renderPaymentTab(s) {
             </div>` : ''}
 
             ${showConsulting ? `<!-- 컨설팅 총액 -->
-            <div style="background:linear-gradient(135deg, #d1fae5, #a7f3d0); padding:14px; border-radius:8px;">
+            <div style="background:linear-gradient(135deg, ${consultingTotal < 0 ? '#fee2e2, #fecaca' : '#d1fae5, #a7f3d0'}); padding:14px; border-radius:8px;">
                 <div style="display:flex; justify-content:space-between; align-items:center;">
                     <div>
-                        <div style="font-size:11px; color:#065f46;">컨설팅 총액</div>
-                        <div style="font-size:10px; color:#059669;">(총공사 - 노무비 - 경비)</div>
+                        <div style="font-size:11px; color:${consultingTotal < 0 ? '#7f1d1d' : '#065f46'};">컨설팅 총액</div>
+                        <div style="font-size:10px; color:${consultingTotal < 0 ? '#991b1b' : '#059669'};">(총공사 - 노무비 - 경비)</div>
                     </div>
-                    <div style="font-size:22px; font-weight:700; color:#059669;">${consultingTotal.toLocaleString()}원</div>
+                    <div style="font-size:22px; font-weight:700; color:${consultingTotal < 0 ? '#dc2626' : '#059669'};">${consultingTotal.toLocaleString()}원</div>
                 </div>
             </div>` : ''}
         </div>
@@ -5470,7 +5470,7 @@ async function downloadSitePDF() {
                     <div style="font-weight:bold; margin-bottom:8px;">[금액 정보]</div>
                     <div style="display:grid; grid-template-columns:repeat(4,1fr); gap:8px; font-size:13px;">
                         <div>총공사금액: <b>${(s.totalAmount || 0).toLocaleString()}원</b></div>
-                        <div>컨설팅 총액: <b style="color:#059669;">${consultingTotal.toLocaleString()}원</b></div>
+                        <div>컨설팅 총액: <b style="color:${consultingTotal < 0 ? '#dc2626' : '#059669'};">${consultingTotal.toLocaleString()}원</b></div>
                         <div>노무비 총액: <b style="color:#b45309;">${totalLabor.toLocaleString()}원</b></div>
                         <div>경비 총액: <b>${expenseTotal.toLocaleString()}원</b></div>
                     </div>
