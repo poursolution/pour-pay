@@ -885,7 +885,13 @@ function formatCurrency(input) {
     let v = input.value.replace(/[^0-9]/g, '');
     if (v) input.value = Number(v).toLocaleString();
 }
-function parseCurrency(str) { return parseInt(String(str || '0').replace(/[^0-9]/g, '')) || 0; }
+function parseCurrency(str) {
+    const cleaned = String(str || '0').replace(/[^\d-]/g, ''); // 숫자와 마이너스만 남김
+    const isNegative = cleaned.startsWith('-');
+    const number = cleaned.replace(/-/g, ''); // 모든 마이너스 제거
+    const result = parseInt(number) || 0;
+    return isNegative ? -result : result;
+}
 function formatMoney(n) { return n ? Number(n).toLocaleString() + '원' : '-'; }
 function toast(msg) {
     const old = document.querySelector('.toast'); if (old) old.remove();
