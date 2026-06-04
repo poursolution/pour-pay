@@ -944,6 +944,9 @@ async function loadData() {
             }
         }
         dataLoaded = true;
+        // 🛡️ Overwrite Guard: 현재 메모리 data가 실제로 반영하는 원격 버전 기록
+        // (라인 990처럼 데이터 없이 _syncVersion만 올리는 경로에서는 건드리지 않음)
+        window._dataContentVersion = data._syncVersion || 0;
         updateSyncStatus('connected', '연결됨');
         renderAll();
         
@@ -1180,6 +1183,8 @@ async function applyRemoteData(val) {
         _lastUpdated: val._lastUpdated,
         _syncVersion: val._syncVersion
     };
+    // 🛡️ Overwrite Guard: 전체 데이터를 실제로 받아 적용했으므로 콘텐츠 버전 갱신
+    window._dataContentVersion = val._syncVersion || 0;
     renderAll();
     if (currentUser?.role === 'manager') {
         restoreUserImages(currentUser.id);
@@ -1287,6 +1292,42 @@ async function saveData() {
             });
         });
 
+        // 🛡️ Overwrite Guard (read-before-write): 전체 블롭 set 직전 원격 최신 버전 확인
+        // 내가 로드한 이후 다른 세션이 저장했다면( remote > 내 콘텐츠버전 ),
+        // 통째로 덮어쓰면 그 변경분이 유실되므로 저장을 중단하고 최신본을 다시 받는다.
+        try {
+            const remoteVerSnap = await db.ref('siteData/_syncVersion').once('value');
+            const remoteVer = remoteVerSnap.val() || 0;
+            const contentVer = window._dataContentVersion || 0;
+            if (remoteVer > contentVer) {
+                console.warn(`⛔ Overwrite blocked: remote v${remoteVer} > local content v${contentVer}`);
+                updateSyncStatus('error', '저장 보류');
+                toast('⚠️ 다른 곳에서 먼저 변경되었습니다. 최신 데이터를 불러왔습니다 — 방금 작업을 다시 입력/저장해주세요.');
+                // 최신 데이터로 로컬 갱신 (DB 쓰기 아님: 읽기 + 화면 갱신만)
+                const freshSnap = await db.ref('siteData').once('value');
+                const fresh = freshSnap.val();
+                if (fresh) {
+                    data = {
+                        managers: fresh.managers || [],
+                        contractors: fresh.contractors || [],
+                        sites: fresh.sites || [],
+                        teamMembers: fresh.teamMembers || [],
+                        siteManagers: fresh.siteManagers || [],
+                        workers: fresh.workers || [],
+                        attendance: fresh.attendance || [],
+                        _lastUpdated: fresh._lastUpdated,
+                        _syncVersion: fresh._syncVersion
+                    };
+                    window._dataContentVersion = fresh._syncVersion || 0;
+                    renderAll();
+                }
+                return; // 덮어쓰기 중단 (finally에서 _isSaving 해제)
+            }
+        } catch (guardErr) {
+            // 가드 확인 자체가 실패하면(네트워크 등) 저장을 막지는 않되 경고만 남김
+            console.warn('Overwrite guard check failed, proceeding:', guardErr);
+        }
+
         const savePromises = [db.ref('siteData').set(dataClone)];
         imageRefs.forEach(img => {
             savePromises.push(
@@ -1294,6 +1335,9 @@ async function saveData() {
             );
         });
         await Promise.all(savePromises);
+
+        // 🛡️ Overwrite Guard: 방금 내가 쓴 버전이 곧 내 콘텐츠의 최신 버전
+        window._dataContentVersion = data._syncVersion || 0;
 
         try {
             localStorage.setItem('siteData_backup', JSON.stringify(dataClone));
@@ -2728,6 +2772,36 @@ function getSiteMonthWorkers(siteId, yearMonthKey) {
     });
 }
 
+/* 작업자(worker) → 팀원(teamMember) 레코드 해석
+   - tmId가 매칭되면 그대로 사용 (정상 경로)
+   - tmId가 비었거나 끊긴 경우(직접입력/구데이터) 이름→(같은 소장님)→연락처 순으로 폴백 매칭
+   - 순수 읽기 전용: data를 수정/저장하지 않음 */
+function resolveTeamMember(w) {
+    if (!w) return null;
+    const tms = data.teamMembers || [];
+    // 1) tmId 정확 매칭
+    if (w.tmId) {
+        const byId = tms.find(t => t.id === w.tmId);
+        if (byId) return byId;
+    }
+    // 2) 이름 매칭 (tmId 없거나 끊긴 경우 폴백)
+    const norm = s => String(s || '').replace(/[\s-]/g, '');
+    let cands = tms.filter(t => t.name === w.name);
+    if (!cands.length) return null;
+    // 같은 소장님 팀원 우선
+    if (w.mgrId) {
+        const sameMgr = cands.filter(t => t.mgrId === w.mgrId);
+        if (sameMgr.length) cands = sameMgr;
+    }
+    if (cands.length === 1) return cands[0];
+    // 동명이인 → 연락처로 구분
+    if (w.phone) {
+        const byPhone = cands.find(t => norm(t.phone) === norm(w.phone));
+        if (byPhone) return byPhone;
+    }
+    return cands[0];
+}
+
 /* 현장 상세 */
 function openSiteDetail(id, keepTab = false) {
     currentSiteId = id;
@@ -3049,7 +3123,7 @@ function renderLaborTab(siteId, assigns, workers) {
     let totalGongsu = 0, totalIlsu = 0, totalAmount = 0;
     let adminInsCount = 0;
     const workerStats = workers.map(w => {
-        const tm = data.teamMembers.find(t => t.id === w.tmId);
+        const tm = resolveTeamMember(w);
         const wage = w.wage || tm?.wage || 200000;
         const att = monthAtt[w.id] || {};
         const gongsu = Object.values(att).reduce((s, v) => s + (parseFloat(v) || 0), 0);
@@ -5752,7 +5826,7 @@ async function downloadAttendanceExcel(siteId) {
     // 데이터 행
     let totalGongsu = 0, totalIlsu = 0, totalAmount = 0;
     workers.forEach((w, idx) => {
-        const tm = data.teamMembers.find(t => t.id === w.tmId);
+        const tm = resolveTeamMember(w);
         const wage = w.wage || tm?.wage || 200000;
         const att = monthAtt[w.id] || {};
         const gongsu = Object.values(att).reduce((sum, v) => sum + (parseFloat(v) || 0), 0);
@@ -5840,7 +5914,7 @@ async function downloadWorkerPDF(siteId) {
         
         for (let i = 0; i < workers.length; i++) {
             const w = workers[i];
-            const tm = w.tmId ? data.teamMembers.find(t => t.id === w.tmId) : null;
+            const tm = resolveTeamMember(w);
             
             if (!isFirstPage) doc.addPage();
             isFirstPage = false;
@@ -5889,7 +5963,7 @@ async function downloadWorkerPDF(siteId) {
                     <table style="width:100%; font-size:14px;">
                         <tr><td style="padding:6px 0;"><b>연락처:</b> ${w.phone || tm?.phone || '-'}</td><td><b>주민번호:</b> ${tm?.ssn || '-'}</td></tr>
                         <tr><td style="padding:6px 0;"><b>은행:</b> ${tm?.bank || '-'}</td><td><b>계좌:</b> ${tm?.account || '-'}</td></tr>
-                        <tr><td style="padding:6px 0;"><b>일당:</b> ${(tm?.wage || 0).toLocaleString()}원</td>${isForeign ? `<td><b>외국인코드:</b> ${tm?.foreignCode || '-'}</td>` : '<td></td>'}</tr>
+                        <tr><td style="padding:6px 0;"><b>일당:</b> ${(w.wage || tm?.wage || 200000).toLocaleString()}원</td>${isForeign ? `<td><b>외국인코드:</b> ${tm?.foreignCode || '-'}</td>` : '<td></td>'}</tr>
                         <tr><td colspan="2" style="padding:6px 0;"><b>주소:</b> ${tm?.address || '-'}</td></tr>
                     </table>
                 </div>
@@ -6686,7 +6760,7 @@ function renderMgrSiteWorkers(site, sm) {
             </div>` : ''}
 
             ${workers.length ? workers.map(w => {
-                const tm = w.tmId ? data.teamMembers.find(t => t.id === w.tmId) : null;
+                const tm = resolveTeamMember(w);
                 return `<div style="padding:12px; background:#f8fafc; border-radius:8px; margin-bottom:6px;">
                     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
                         <div><b style="font-size:14px;">${w.name}</b> ${tm?.nation==='foreign'?'🌏':''}</div>
@@ -6745,7 +6819,7 @@ function renderMgrSiteAttendance(site, sm) {
 
     // 작업자별 보험 판정 사전 계산
     const workerStats = workers.map(w => {
-        const tm = data.teamMembers.find(t => t.id === w.tmId);
+        const tm = resolveTeamMember(w);
         const wage = w.wage || tm?.wage || 200000;
         const att = monthAtt[w.id] || {};
         const gongsu = Object.values(att).reduce((s, v) => s + (parseFloat(v) || 0), 0);
@@ -7073,7 +7147,7 @@ function refreshAttendanceTotals(siteId) {
     let insCount = 0;
 
     workers.forEach(w => {
-        const tm = data.teamMembers.find(t => t.id === w.tmId);
+        const tm = resolveTeamMember(w);
         const wage = w.wage || tm?.wage || 200000;
         const att = monthAtt[w.id] || {};
 
