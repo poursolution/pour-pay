@@ -829,6 +829,52 @@
         });
     }).observe(document.documentElement, { childList: true, subtree: true });
 })();
+/* 🔄 앱 버전 — 배포할 때마다 이 값을 새로 바꾸세요 (예: 날짜+순번) */
+const APP_VERSION = '2026-06-05-1';
+
+/* 자동 업데이트: 옛 서비스워커 제거 + 서버 최신 버전 감지 시 자동 새로고침.
+   Firebase 데이터·로그인(localStorage)은 건드리지 않고, 브라우저 캐시(Cache Storage)만 비웁니다. */
+(async function autoUpdate() {
+  try {
+    let needReload = false;
+    let serverVer = null;
+
+    // 1) 옛 버전이 남긴 서비스워커 제거 (이 앱은 SW를 쓰지 않음)
+    if (navigator.serviceWorker) {
+      try {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        if (regs.length) {
+          for (const r of regs) { try { await r.unregister(); } catch (e) {} }
+          needReload = true;
+        }
+      } catch (e) {}
+    }
+
+    // 2) 서버의 최신 index.html 버전과 비교 (캐시 무시)
+    try {
+      const res = await fetch('index.html?_v=' + Date.now(), { cache: 'no-store' });
+      const txt = await res.text();
+      const m = txt.match(/APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
+      serverVer = m && m[1];
+      if (serverVer && serverVer !== APP_VERSION) needReload = true;
+    } catch (e) { /* 오프라인 등은 무시 */ }
+
+    if (needReload) {
+      if (window.caches) {
+        try { const ks = await caches.keys(); for (const k of ks) await caches.delete(k); } catch (e) {}
+      }
+      // 무한 새로고침 방지: 동일 버전은 세션당 1회만
+      const key = '_upd_' + (serverVer || 'sw');
+      if (!sessionStorage.getItem(key)) {
+        sessionStorage.setItem(key, '1');
+        location.reload();
+      }
+    }
+  } catch (e) {
+    console.warn('자동 업데이트 확인 실패:', e);
+  }
+})();
+
 /* Firebase 초기화 */
 const firebaseConfig = {
     apiKey: "AIzaSyAwpB3cEsIdp_1cuzukQw7CC8R4_A_i_yE",
