@@ -829,6 +829,52 @@
         });
     }).observe(document.documentElement, { childList: true, subtree: true });
 })();
+/* 🔄 앱 버전 — 배포할 때마다 이 값을 새로 바꾸세요 (예: 날짜+순번) */
+const APP_VERSION = '2026-06-19-1';
+
+/* 자동 업데이트: 옛 서비스워커 제거 + 서버 최신 버전 감지 시 자동 새로고침.
+   Firebase 데이터·로그인(localStorage)은 건드리지 않고, 브라우저 캐시(Cache Storage)만 비웁니다. */
+(async function autoUpdate() {
+  try {
+    let needReload = false;
+    let serverVer = null;
+
+    // 1) 옛 버전이 남긴 서비스워커 제거 (이 앱은 SW를 쓰지 않음)
+    if (navigator.serviceWorker) {
+      try {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        if (regs.length) {
+          for (const r of regs) { try { await r.unregister(); } catch (e) {} }
+          needReload = true;
+        }
+      } catch (e) {}
+    }
+
+    // 2) 서버의 최신 index.html 버전과 비교 (캐시 무시)
+    try {
+      const res = await fetch('index.html?_v=' + Date.now(), { cache: 'no-store' });
+      const txt = await res.text();
+      const m = txt.match(/APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
+      serverVer = m && m[1];
+      if (serverVer && serverVer !== APP_VERSION) needReload = true;
+    } catch (e) { /* 오프라인 등은 무시 */ }
+
+    if (needReload) {
+      if (window.caches) {
+        try { const ks = await caches.keys(); for (const k of ks) await caches.delete(k); } catch (e) {}
+      }
+      // 무한 새로고침 방지: 동일 버전은 세션당 1회만
+      const key = '_upd_' + (serverVer || 'sw');
+      if (!sessionStorage.getItem(key)) {
+        sessionStorage.setItem(key, '1');
+        location.reload();
+      }
+    }
+  } catch (e) {
+    console.warn('자동 업데이트 확인 실패:', e);
+  }
+})();
+
 /* Firebase 초기화 */
 const firebaseConfig = {
     apiKey: "AIzaSyAwpB3cEsIdp_1cuzukQw7CC8R4_A_i_yE",
@@ -2559,6 +2605,9 @@ function renderSites() {
                 <label style="display:flex; align-items:center; gap:4px; font-size:11px; cursor:pointer; background:#dbeafe; padding:4px 8px; border-radius:5px;">
                     <input type="checkbox" id="hideContractReqDone" onchange="filterSites()"> 계약서요청완료 숨김
                 </label>
+                <label style="display:flex; align-items:center; gap:4px; font-size:11px; cursor:pointer; background:#fef9c3; padding:4px 8px; border-radius:5px;">
+                    <input type="checkbox" id="showNoEndDate" onchange="filterSites()"> 준공일 미입력만
+                </label>
             </div>
             
             <div id="siteListInner" style="min-height:300px;">
@@ -2597,10 +2646,14 @@ function renderSiteList(sites) {
         const laborRemain = laborTotal - laborPaid;
         
         
-        // 완료 조건: 공정률 100% AND 컨설팅/노무비 모두 청구 있고 잔여 0원
-        const isPaymentCompleted = progress >= 100 && 
-            consultingTotal > 0 && laborTotal > 0 && 
-            consultingRemain <= 0 && laborRemain <= 0;
+        // 공사형태별 사용 대금 카테고리 (직영공사=노무비만, 기술이전=컨설팅비만, 컨설팅=둘다)
+        const _cType = s.siteType || 'consulting';
+        const _useConsulting = _cType !== 'direct';
+        const _useLabor = _cType !== 'transfer';
+        const consultingOK = !_useConsulting || (consultingTotal > 0 && consultingRemain <= 0);
+        const laborOK = !_useLabor || (laborTotal > 0 && laborRemain <= 0);
+        // 완료 조건: 공정률 100% AND 해당 공사형태의 대금 모두 청구·정산 완료
+        const isPaymentCompleted = progress >= 100 && consultingOK && laborOK;
 
         return `<div class="list-item" onclick="openSiteDetail('${s.id}')" style="border-left: 4px solid ${typeColor}; ${isPaymentCompleted ? 'opacity:0.6; background:#f0fdf4;' : ''}">
             <div style="display:flex; align-items:center; gap:12px; flex:1;">
@@ -2630,6 +2683,7 @@ function filterSites() {
     
     const hideCompleted = document.getElementById('hideCompleted')?.checked || false;
     const hideContractReqDone = document.getElementById('hideContractReqDone')?.checked || false;
+    const showNoEndDate = document.getElementById('showNoEndDate')?.checked || false;
 
     const filtered = data.sites.filter(s => {
         // 완료 현장 판단: 컨설팅 + 노무비 모두 청구 완료 & 잔여금액 0원
@@ -2643,15 +2697,21 @@ function filterSites() {
         const laborRemain = laborTotal - laborPaid;
         const progress = s.progress || 0;
         
-        // 완료 조건: 공정률 100% AND 컨설팅/노무비 모두 청구 있고 잔여 0원
-        const isPaymentCompleted = progress >= 100 && 
-            consultingTotal > 0 && laborTotal > 0 && 
-            consultingRemain <= 0 && laborRemain <= 0;
+        // 공사형태별 사용 대금 카테고리 (직영공사=노무비만, 기술이전=컨설팅비만, 컨설팅=둘다)
+        const _cType = s.siteType || 'consulting';
+        const _useConsulting = _cType !== 'direct';
+        const _useLabor = _cType !== 'transfer';
+        const consultingOK = !_useConsulting || (consultingTotal > 0 && consultingRemain <= 0);
+        const laborOK = !_useLabor || (laborTotal > 0 && laborRemain <= 0);
+        // 완료 조건: 공정률 100% AND 해당 공사형태의 대금 모두 청구·정산 완료
+        const isPaymentCompleted = progress >= 100 && consultingOK && laborOK;
         
         // 완료 현장 숨김 (체크 해제 시)
         if (!hideCompleted && isPaymentCompleted) return false;
         // 계약서요청완료 숨김 (contractReqDate가 있으면 완료 → 숨김)
         if (hideContractReqDone && s.contractReqDate) return false;
+        // 준공일 미입력만 표시 (endDate가 비어있는 현장만)
+        if (showNoEndDate && s.endDate) return false;
         
         // 검색어 필터
         if (q && !(s.name || '').toLowerCase().includes(q) && !(s.contractor || '').toLowerCase().includes(q)) return false;
@@ -5307,8 +5367,9 @@ function renderExports() {
             <div style="padding:16px; background:#fef3c7; border-radius:8px;">
                 <h4 style="margin-bottom:8px; font-size:13px;">📑 현장별 상세 리포트</h4>
                 <p style="font-size:11px; color:var(--text-light); margin-bottom:8px;">현장별 금액/대금/공종/소장님/이슈사항 전체 정보</p>
-                <div style="display:flex; gap:8px; flex-wrap:wrap;">
-                    <select id="pdfSiteSelect" style="padding:6px 10px; border:1px solid var(--border); border-radius:5px; font-size:12px;">
+                <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
+                    <input type="text" id="pdfSiteSearch" placeholder="🔍 현장명 검색" oninput="filterPdfSiteOptions()" style="padding:6px 10px; border:1px solid var(--border); border-radius:5px; font-size:12px; width:160px;">
+                    <select id="pdfSiteSelect" style="padding:6px 10px; border:1px solid var(--border); border-radius:5px; font-size:12px; min-width:160px;">
                         <option value="all">전체 현장</option>
                         ${[...data.sites].sort((a,b) => (a.name||'').localeCompare(b.name||'','ko')).map(s => `<option value="${s.id}">${s.name}</option>`).join('')}
                     </select>
@@ -5479,6 +5540,27 @@ function downloadSitesExcel() {
     XLSX.utils.book_append_sheet(wb, ws, '현장정보');
     XLSX.writeFile(wb, `현장정보_${new Date().toISOString().slice(0, 10)}.xlsx`);
     toast('다운로드 완료');
+}
+
+/* 현장별 상세 리포트 - 현장명 검색 필터 */
+function filterPdfSiteOptions() {
+    const q = (document.getElementById('pdfSiteSearch')?.value || '').toLowerCase().trim();
+    const select = document.getElementById('pdfSiteSelect');
+    if (!select) return;
+    const prev = select.value;
+    const matched = [...data.sites]
+        .filter(s => !q || (s.name || '').toLowerCase().includes(q))
+        .sort((a, b) => (a.name || '').localeCompare(b.name || '', 'ko'));
+    let html = '<option value="all">전체 현장' + (q ? ` (검색결과 ${matched.length}건)` : '') + '</option>';
+    html += matched.map(s => `<option value="${s.id}">${s.name}</option>`).join('');
+    select.innerHTML = html;
+    // 이전 선택 유지 (검색결과에 남아있으면)
+    if ([...select.options].some(o => o.value === prev)) {
+        select.value = prev;
+    } else if (q && matched.length) {
+        // 검색 시 첫 매칭 현장 자동 선택
+        select.value = matched[0].id;
+    }
 }
 
 /* 현장별 상세 PDF 다운로드 (html2canvas 방식 - 한글 지원) */
