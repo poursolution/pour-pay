@@ -491,6 +491,7 @@
                         <option value="consulting">컨설팅</option>
                         <option value="direct">직영공사</option>
                         <option value="transfer">기술이전</option>
+                        <option value="construction">공사</option>
                     </select>
                 </div>
             </div>
@@ -830,7 +831,7 @@
     }).observe(document.documentElement, { childList: true, subtree: true });
 })();
 /* 🔄 앱 버전 — 배포할 때마다 이 값을 새로 바꾸세요 (예: 날짜+순번) */
-const APP_VERSION = '2026-06-19-1';
+const APP_VERSION = '2026-07-02-1';
 
 /* 자동 업데이트: 옛 서비스워커 제거 + 서버 최신 버전 감지 시 자동 새로고침.
    Firebase 데이터·로그인(localStorage)은 건드리지 않고, 브라우저 캐시(Cache Storage)만 비웁니다. */
@@ -2533,8 +2534,8 @@ function removeUnitPriceRow(i) {
 }
 
 /* 현장 목록 */
-const SITE_TYPE_NAMES = { consulting: '컨설팅', direct: '직영공사', transfer: '기술이전' };
-const SITE_TYPE_ORDER = { consulting: 0, direct: 1, transfer: 2 };
+const SITE_TYPE_NAMES = { consulting: '컨설팅', direct: '직영공사', transfer: '기술이전', construction: '공사' };
+const SITE_TYPE_ORDER = { consulting: 0, direct: 1, transfer: 2, construction: 3 };
 function sortSites(sites) {
     return [...sites].sort((a, b) => {
         // 1차: 공사형태 내림차순 (transfer=2 > direct=1 > consulting=0)
@@ -2568,6 +2569,7 @@ function renderSites() {
                     <option value="consulting">컨설팅</option>
                     <option value="direct">직영공사</option>
                     <option value="transfer">기술이전</option>
+                    <option value="construction">공사</option>
                 </select>
                 
                 <!-- 시공사 검색 필터 -->
@@ -2623,8 +2625,8 @@ function renderSiteList(sites) {
     if (!sites.length) return '<div class="empty">현장이 없습니다</div>';
 
     // 공사형태별 색상
-    const typeColors = { consulting: '#3b82f6', direct: '#10b981', transfer: '#f59e0b' };
-    const typeBgColors = { consulting: '#dbeafe', direct: '#d1fae5', transfer: '#fef3c7' };
+    const typeColors = { consulting: '#3b82f6', direct: '#10b981', transfer: '#f59e0b', construction: '#8b5cf6' };
+    const typeBgColors = { consulting: '#dbeafe', direct: '#d1fae5', transfer: '#fef3c7', construction: '#ede9fe' };
 
     return `<div class="site-list-grid">${sites.map(s => {
         const assigns = data.siteManagers.filter(sm => sm.siteId === s.id);
@@ -3017,8 +3019,8 @@ function renderSiteInfoTab(s, assigns) {
     let statusHtml = '';
     let showStatusCard = true;
     
-    if (siteType === 'consulting') {
-        // 컨설팅: 모든 항목
+    if (siteType === 'consulting' || siteType === 'construction') {
+        // 컨설팅/공사: 모든 항목
         statusHtml = `
             <div class="status-item ${s.startDocDate ? 'done' : ''}"><label>착공서류</label><input type="date" value="${s.startDocDate || ''}" onchange="updateStatusDate('${s.id}', 'startDocDate', this.value)"></div>
             <div class="status-item ${s.endDocDate ? 'done' : ''}"><label>준공서류</label><input type="date" value="${s.endDocDate || ''}" onchange="updateStatusDate('${s.id}', 'endDocDate', this.value)"></div>
