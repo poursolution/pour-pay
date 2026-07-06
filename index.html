@@ -831,7 +831,7 @@
     }).observe(document.documentElement, { childList: true, subtree: true });
 })();
 /* 🔄 앱 버전 — 배포할 때마다 이 값을 새로 바꾸세요 (예: 날짜+순번) */
-const APP_VERSION = '2026-07-02-1';
+const APP_VERSION = '2026-07-06-1';
 
 /* 자동 업데이트: 옛 서비스워커 제거 + 서버 최신 버전 감지 시 자동 새로고침.
    Firebase 데이터·로그인(localStorage)은 건드리지 않고, 브라우저 캐시(Cache Storage)만 비웁니다. */
@@ -6222,6 +6222,311 @@ let insThresholdDays = 8;           // 근무일수 기준 (일)
 let insThresholdIncomeEnabled = true;  // 소득기준 사용 여부 (기본 적용)
 let insThresholdIncome = 2200000;   // 월 예상소득 기준 (원)
 
+/* ── 내미수금(미입금 항목별 모아보기) : 읽기 전용 집계, 저장은 기존 updatePayItemMgr 재사용 ── */
+function mgrUnpaidFmtIssue(s){
+    const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s || '');
+    return m ? (+m[2]) + '/' + (+m[3]) : (s || '');
+}
+function mgrUnpaidChipStyle(cat){
+    const map = {
+        advance: 'background:#f6edd8;color:#9a7318;',   // 선급금
+        interim: 'background:#e7eef7;color:#3b6ea5;',   // 중도금
+        balance: 'background:#efe9f4;color:#6d5896;',   // 잔금
+        report : 'background:#eceae6;color:#7a736a;'    // 노임신고
+    };
+    return map[cat] || map.report;
+}
+function mgrUnpaidAgeBadge(a){
+    if(!a || a.days < 0) return `<span class="badge">경과일 미상</span>`;
+    const lab = `${a.src} 후 ${a.days}일`;
+    const cls = a.days >= 30 ? 'badge-danger' : a.days >= 14 ? 'badge-warning' : 'badge';
+    return `<span class="badge ${cls}">${lab}</span>`;
+}
+
+function getMgrUnpaid(){
+    const today = new Date(); today.setHours(0,0,0,0);
+    const mySites = data.siteManagers.filter(sm => sm.mgrId === currentUser.id);
+    const rows = [];
+
+    const agingOf = (p, site) => {
+        const anchor = p.expectedDate || p.issueDate || site.endDate;
+        if(!anchor) return { days:-1, src:null };
+        const d = Math.max(Math.floor((today - new Date(anchor)) / 86400000), 0);
+        return { days:d, src: p.expectedDate ? '예정' : p.issueDate ? '청구' : '준공' };
+    };
+
+    mySites.forEach(sm => {
+        const site = data.sites.find(s => s.id === sm.siteId);
+        if(!site) return;
+
+        // 내 노무비(laborPays) 중 미입금만 — 계산서 발행된 것만(미발행 제외), 컨설팅은 건드리지 않음
+        const mine = (site.laborPays || [])
+            .map((p, idx) => ({ p, idx }))
+            .filter(x => (!x.p.mgrId || x.p.mgrId === currentUser.id)
+                          && x.p.issueDate            // 계산서 발행된 건만 (미발행 = 아직 청구 전이라 제외)
+                          && !x.p.paidDate && (x.p.amount || 0) > 0);
+        if(!mine.length) return;
+        mine.forEach(x => { x.aging = agingOf(x.p, site); });
+
+        // 선급/중도/잔금 = 개별 줄, 노임신고(report) = 현장별 1줄로 합산
+        const lines = [];
+        const labors = [];
+        mine.forEach(x => {
+            const isLabor = x.p.type === 'report' || /노임/.test(x.p.name || '');
+            if(isLabor){ labors.push(x); return; }
+            lines.push({
+                cat: x.p.type || 'etc',
+                label: PAY_NAMES[x.p.type] || x.p.name || '대금',
+                desc: x.p.issueDate ? '계산서 ' + mgrUnpaidFmtIssue(x.p.issueDate) + ' 발행' : '계산서 미발행',
+                amount: x.p.amount || 0,
+                idxs: [x.idx],
+                aging: x.aging
+            });
+        });
+        if(labors.length){
+            const amount = labors.reduce((s,x)=>s+(x.p.amount||0), 0);
+            const worst = labors.reduce((a,x)=> (x.aging.days > a.days ? x.aging : a), { days:-1, src:null });
+            lines.push({
+                cat: 'report',
+                label: '노임신고',
+                desc: labors.length + '건',
+                amount,
+                idxs: labors.map(x=>x.idx),
+                aging: worst
+            });
+        }
+        lines.sort((a,b)=> b.aging.days - a.aging.days);
+
+        const total = lines.reduce((s,l)=>s+l.amount, 0);
+        const worst = Math.max(-1, ...lines.map(l=>l.aging.days));
+        rows.push({ siteId: site.id, siteName: site.name, contractor: site.contractor || '', lines, total, worst });
+    });
+
+    rows.sort((a,b)=> b.worst - a.worst || b.total - a.total);
+    return rows;
+}
+
+// UI 전용: 입금 버튼 → 달력 열기 (저장 아님)
+function mgrOpenDate(btn){
+    const inp = btn.parentElement.querySelector('input[type="date"]');
+    if(!inp) return;
+    if(inp.showPicker){ try { inp.showPicker(); return; } catch(e){} }
+    inp.style.position = 'static'; inp.style.opacity = '1';
+    inp.style.width = '150px'; inp.style.height = 'auto'; inp.style.pointerEvents = 'auto';
+    inp.focus();
+}
+// 입금일 저장: 기존 updatePayItemMgr 재사용(명시적 날짜 선택 후에만) → 내현장과 동일 데이터 갱신
+function mgrPay(siteId, idxCsv, date){
+    if(!date) return;
+    String(idxCsv).split(',').forEach(i => updatePayItemMgr(siteId, Number(i), 'paidDate', date));
+    renderManagerView(); // 즉시 반영(읽기 재렌더). 저장은 위 updatePayItemMgr가 이미 수행
+}
+
+function renderMgrUnpaid(){
+    const rows = getMgrUnpaid();
+    const grand = rows.reduce((s,r)=>s+r.total, 0);
+    const overdueCnt = rows.reduce((s,r)=>s + r.lines.filter(l=>l.aging.days>=30).length, 0);
+
+    if(!rows.length){
+        return `<div style="text-align:center;padding:48px 20px;color:var(--text-light);">
+            <div style="font-size:40px;">🎉</div>
+            <div style="font-weight:700;color:var(--text);margin-top:8px;">받을 돈이 모두 정산됐어요</div>
+            <div style="font-size:13px;margin-top:4px;">미입금 노무비가 없습니다</div></div>`;
+    }
+
+    const dateInput = (siteId, idxs) =>
+        `<span style="position:relative;display:inline-block;">
+            <button class="btn btn-sm" onclick="mgrOpenDate(this)" style="background:#1a1a1a;color:#fff;border:none;padding:6px 13px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">입금</button>
+            <input type="date" value="${new Date().toISOString().slice(0,10)}" onchange="mgrPay('${siteId}','${idxs.join(',')}', this.value)"
+                   style="position:absolute;right:0;top:0;opacity:0;width:1px;height:1px;pointer-events:none;">
+        </span>`;
+
+    return `
+        <div style="background:#1a1a1a;color:#fff;border-radius:2px;padding:16px 18px;margin-bottom:14px;border-left:3px solid #d4a853;">
+            <div style="font-size:12px;color:#cfc9be;">📌 아직 못 받은 노무비 (미수금)</div>
+            <div style="font-size:26px;font-weight:800;margin-top:4px;">${formatMoney(grand)}</div>
+            <div style="font-size:12px;color:#cfc9be;margin-top:8px;">
+                미입금 현장 <b style="color:#d4a853;">${rows.length}</b>곳 · 미입금 항목 <b style="color:#d4a853;">${rows.reduce((s,r)=>s+r.lines.length,0)}</b>건 · 30일↑ 지연 <b style="color:#d4a853;">${overdueCnt}</b>건
+            </div>
+        </div>
+        <div style="display:flex;align-items:center;justify-content:space-between;margin:0 2px 8px;">
+            <div style="font-size:13px;font-weight:700;">미입금 현장 · 항목별</div>
+            <div style="font-size:10.5px;color:var(--text-light);">오래된 순 · 입금일 넣으면 사라집니다</div>
+        </div>
+        ${rows.map(r => `
+            <div style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:13px 14px 11px;margin-bottom:10px;">
+                <div style="font-weight:700;font-size:14px;">${r.siteName}</div>
+                <div style="font-size:11.5px;color:var(--text-light);margin-top:2px;">${r.contractor}</div>
+                <div style="margin-top:10px;border-top:1px solid #f0ece7;">
+                    ${r.lines.map(l => `
+                        <div style="padding:9px 0;border-bottom:1px dashed #efeae4;">
+                            <div style="display:flex;align-items:center;gap:7px;">
+                                <span class="badge" style="${mgrUnpaidChipStyle(l.cat)}border-radius:2px;">${l.label}</span>
+                                <span style="flex:1;font-size:11.5px;color:var(--text-light);">${l.desc}</span>
+                                ${mgrUnpaidAgeBadge(l.aging)}
+                            </div>
+                            <div style="display:flex;align-items:center;justify-content:space-between;margin-top:7px;">
+                                <span style="font-size:15px;font-weight:800;color:#1d4ed8;">${formatMoney(l.amount)}</span>
+                                ${dateInput(r.siteId, l.idxs)}
+                            </div>
+                        </div>`).join('')}
+                </div>
+                <div style="display:flex;align-items:center;justify-content:space-between;margin-top:9px;padding-top:9px;border-top:1px solid #f0ece7;">
+                    <span style="font-size:11.5px;color:var(--text-light);font-weight:600;">현장 미수금 합계</span>
+                    <span style="font-size:15px;font-weight:800;">${formatMoney(r.total)}</span>
+                </div>
+            </div>`).join('')}
+    `;
+}
+
+/* ── 내매출(연간 매출 리포트) : 계산서 발행일·노임신고 발행월 기준 매출 인식(둘 다 issueDate 필드). 읽기 전용 + 엑셀/PDF 다운로드 ── */
+function getMgrSales(year){
+    const mySites = data.siteManagers.filter(sm => sm.mgrId === currentUser.id);
+    const salesByMonth = new Array(12).fill(0);   // 매출(청구) : issueDate 월
+    const depositByMonth = new Array(12).fill(0); // 입금 : paidDate 월
+    let totalSales = 0, totalPaid = 0;
+
+    const ym = d => { const t = new Date(d); return { y: t.getFullYear(), m: t.getMonth() }; };
+
+    mySites.forEach(sm => {
+        const site = data.sites.find(s => s.id === sm.siteId);
+        if(!site) return;
+        (site.laborPays || []).forEach(p => {
+            if(p.mgrId && p.mgrId !== currentUser.id) return;   // 내 노무비만(컨설팅 제외)
+            const amt = p.amount || 0;
+            if(!amt || !p.issueDate) return;                    // 계산서 발행분만 매출 인식
+            const iss = ym(p.issueDate);
+            if(iss.y !== year) return;
+            totalSales += amt;
+            salesByMonth[iss.m] += amt;
+            if(p.paidDate){
+                const pd = ym(p.paidDate);
+                if(pd.y === year){ totalPaid += amt; depositByMonth[pd.m] += amt; }
+            }
+        });
+    });
+
+    return { year, totalSales, totalPaid, unpaid: totalSales - totalPaid, salesByMonth, depositByMonth };
+}
+
+function renderMgrReport(){
+    const year = new Date().getFullYear();
+    const r = getMgrSales(year);
+
+    let cum = 0;
+    const monthRows = r.salesByMonth.map((s, i) => {
+        cum += s - r.depositByMonth[i];
+        return `<tr>
+            <td style="padding:6px 8px;text-align:center;border-bottom:1px solid #eee;">${i+1}월</td>
+            <td style="padding:6px 8px;text-align:right;border-bottom:1px solid #eee;color:#1f3a5f;">${formatMoney(s)}</td>
+            <td style="padding:6px 8px;text-align:right;border-bottom:1px solid #eee;color:#2e8b8b;">${formatMoney(r.depositByMonth[i])}</td>
+            <td style="padding:6px 8px;text-align:right;border-bottom:1px solid #eee;">${formatMoney(cum)}</td>
+        </tr>`;
+    }).join('');
+
+    const card = (label, val, color) => `
+        <div style="flex:1;background:#f7f8fa;border:1px solid #e6e9ed;border-radius:8px;padding:11px 12px;text-align:center;">
+            <div style="font-size:11px;color:#888;font-weight:600;">${label}</div>
+            <div style="font-size:16px;font-weight:800;color:${color};margin-top:4px;">${formatMoney(val)}</div>
+        </div>`;
+
+    return `
+        <div style="display:flex;gap:8px;margin-bottom:12px;">
+            <button onclick="downloadMgrSalesExcel()" style="flex:1;background:#1a1a1a;color:#fff;border:none;padding:11px;border-radius:8px;font-family:inherit;font-weight:700;font-size:13px;cursor:pointer;">📊 엑셀 다운로드</button>
+            <button onclick="downloadMgrSalesPDF()" style="flex:1;background:#d4a853;color:#1a1a1a;border:none;padding:11px;border-radius:8px;font-family:inherit;font-weight:700;font-size:13px;cursor:pointer;">📄 PDF 다운로드</button>
+        </div>
+        <div id="mgrSalesReport" style="background:#fff;border:1px solid var(--border);border-radius:8px;padding:16px;">
+            <div style="background:#1a1a1a;color:#fff;border-radius:6px;padding:12px 14px;">
+                <div style="font-size:16px;font-weight:800;">${currentUser.name} 소장님 · ${year}년 매출</div>
+                <div style="font-size:11px;color:#d4a853;margin-top:2px;">계산서 발행일·노임신고 발행월 기준 · 노무비</div>
+            </div>
+            <div style="display:flex;gap:8px;margin-top:12px;">
+                ${card('연간 총 매출', r.totalSales, '#1f3a5f')}
+                ${card('입금 완료', r.totalPaid, '#2e8b8b')}
+                ${card('미수금', r.unpaid, '#c0392b')}
+            </div>
+            <div style="font-size:12px;font-weight:700;margin:16px 2px 6px;">월별 매출·입금 현황</div>
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+                <thead><tr style="background:#1f3a5f;color:#fff;">
+                    <th style="padding:7px 8px;">월</th>
+                    <th style="padding:7px 8px;text-align:right;">매출(청구)</th>
+                    <th style="padding:7px 8px;text-align:right;">입금액</th>
+                    <th style="padding:7px 8px;text-align:right;">월말 미수 누계</th>
+                </tr></thead>
+                <tbody>
+                    ${monthRows}
+                    <tr style="background:#eaf1f5;font-weight:800;">
+                        <td style="padding:7px 8px;text-align:center;">합계</td>
+                        <td style="padding:7px 8px;text-align:right;">${formatMoney(r.totalSales)}</td>
+                        <td style="padding:7px 8px;text-align:right;">${formatMoney(r.totalPaid)}</td>
+                        <td style="padding:7px 8px;text-align:right;">${formatMoney(r.unpaid)}</td>
+                    </tr>
+                </tbody>
+            </table>
+            <div style="font-size:9.5px;color:#aaa;margin-top:10px;">※ 계산서 발행일(선급·중도·잔금) 및 노임신고 발행월 기준으로 매출을 인식합니다. 컨설팅 대금은 제외됩니다.</div>
+        </div>
+    `;
+}
+
+function downloadMgrSalesExcel(){
+    const year = new Date().getFullYear();
+    const r = getMgrSales(year);
+    const rows = [
+        [`${currentUser.name} 소장님 ${year}년 매출 리포트`],
+        ['계산서 발행일·노임신고 발행월 기준 매출 인식 · 노무비 (컨설팅 제외)'],
+        [],
+        ['연간 총 매출', r.totalSales],
+        ['입금 완료', r.totalPaid],
+        ['미수금', r.unpaid],
+        [],
+        ['월', '매출(청구)', '입금액', '월말 미수 누계'],
+    ];
+    let cum = 0;
+    for(let i=0;i<12;i++){
+        cum += r.salesByMonth[i] - r.depositByMonth[i];
+        rows.push([`${i+1}월`, r.salesByMonth[i], r.depositByMonth[i], cum]);
+    }
+    rows.push(['합계', r.totalSales, r.totalPaid, r.unpaid]);
+
+    const ws = XLSX.utils.aoa_to_sheet(rows);
+    ws['!cols'] = [{wch:16},{wch:16},{wch:16},{wch:18}];
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, `${year}년 매출`);
+    XLSX.writeFile(wb, `내매출_${year}_${new Date().toISOString().slice(0,10)}.xlsx`);
+    if(typeof toast === 'function') toast('엑셀 다운로드 완료');
+}
+
+async function downloadMgrSalesPDF(){
+    const el = document.getElementById('mgrSalesReport');
+    if(!el) return;
+    if(typeof toast === 'function') toast('PDF 생성 중...');
+    try {
+        const canvas = await html2canvas(el, { scale: 2, useCORS: true, backgroundColor: '#ffffff' });
+        const imgData = canvas.toDataURL('image/png');
+        const { jsPDF } = window.jspdf;
+        const pdf = new jsPDF('p', 'mm', 'a4');
+        const pageW = 210, margin = 10, contentW = pageW - margin*2, pageH = 297;
+        const imgW = contentW;
+        const imgH = (canvas.height * imgW) / canvas.width;
+        let remaining = imgH, sourceY = 0, first = true;
+        while(remaining > 0){
+            if(!first) pdf.addPage();
+            first = false;
+            const sliceH = Math.min(remaining, pageH - margin*2);
+            const sourceSliceH = (sliceH / imgH) * canvas.height;
+            const tmp = document.createElement('canvas');
+            tmp.width = canvas.width; tmp.height = sourceSliceH;
+            tmp.getContext('2d').drawImage(canvas, 0, sourceY, canvas.width, sourceSliceH, 0, 0, canvas.width, sourceSliceH);
+            pdf.addImage(tmp.toDataURL('image/png'), 'PNG', margin, margin, imgW, sliceH);
+            remaining -= sliceH; sourceY += sourceSliceH;
+        }
+        pdf.save(`내매출_${new Date().getFullYear()}_${new Date().toISOString().slice(0,10)}.pdf`);
+        if(typeof toast === 'function') toast('PDF 다운로드 완료');
+    } catch(e){
+        if(typeof toast === 'function') toast('PDF 생성 실패');
+    }
+}
+
 function renderManagerView() {
     // ── 스크롤·포커스 보존 ──
     const scrollY = window.scrollY;
@@ -6229,6 +6534,8 @@ function renderManagerView() {
     const focused = document.activeElement;
     const focusId = focused?.id || '';
     const focusSel = [focused?.selectionStart, focused?.selectionEnd];
+
+    const unpaidCount = getMgrUnpaid().length;
 
     document.getElementById('mgrViewContent').innerHTML = `
         <div class="card">
@@ -6248,8 +6555,10 @@ function renderManagerView() {
             <button class="tab ${mgrViewTab==='myinfo'?'active':''}" onclick="mgrViewTab='myinfo'; mgrSelectedSite=null; renderManagerView();">내정보</button>
             <button class="tab ${mgrViewTab==='myteam'?'active':''}" onclick="mgrViewTab='myteam'; mgrSelectedSite=null; renderManagerView();">내팀원</button>
             <button class="tab ${mgrViewTab==='mysites'?'active':''}" onclick="mgrViewTab='mysites'; mgrSelectedSite=null; renderManagerView();">내현장</button>
+            <button class="tab ${mgrViewTab==='unpaid'?'active':''}" onclick="mgrViewTab='unpaid'; mgrSelectedSite=null; renderManagerView();">내미수금${unpaidCount>0?` <span class="badge badge-danger" style="margin-left:4px;">${unpaidCount}</span>`:''}</button>
+            <button class="tab ${mgrViewTab==='report'?'active':''}" onclick="mgrViewTab='report'; mgrSelectedSite=null; renderManagerView();">내매출</button>
         </div>
-        <div id="mgrViewTabContent">${mgrViewTab==='myinfo' ? renderMgrMyInfo() : mgrViewTab==='myteam' ? renderMgrMyTeam() : renderMgrMySites()}</div>
+        <div id="mgrViewTabContent">${mgrViewTab==='myinfo' ? renderMgrMyInfo() : mgrViewTab==='myteam' ? renderMgrMyTeam() : mgrViewTab==='unpaid' ? renderMgrUnpaid() : mgrViewTab==='report' ? renderMgrReport() : renderMgrMySites()}</div>
     `;
 
     // ── 스크롤·포커스 즉시 복원 ──
