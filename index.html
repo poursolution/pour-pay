@@ -830,15 +830,19 @@
         });
     }).observe(document.documentElement, { childList: true, subtree: true });
 })();
-/* 🔄 앱 버전 — 배포할 때마다 이 값을 새로 바꾸세요 (예: 날짜+순번) */
-const APP_VERSION = '2026-07-09-1';
+/* 🔄 앱 버전 — 이제 매번 바꾸지 않아도 됩니다.
+   업데이트 판단은 아래 autoUpdate가 서버 파일의 ETag로 자동 처리합니다.
+   이 값은 화면/콘솔 표시용 + 비상 폴백용입니다. */
+const APP_VERSION = '2026-08-10-auto';
 
-/* 자동 업데이트: 옛 서비스워커 제거 + 서버 최신 버전 감지 시 자동 새로고침.
-   Firebase 데이터·로그인(localStorage)은 건드리지 않고, 브라우저 캐시(Cache Storage)만 비웁니다. */
+/* 자동 업데이트 v2 — 서버 index.html의 ETag(내용이 바뀌면 자동으로 달라지는 지문)를
+   버전 대신 사용합니다. 배포 시 사람이 버전을 찍을 필요가 없습니다.
+   Firebase 데이터·로그인(localStorage 사용자정보)은 건드리지 않고,
+   브라우저 캐시(Cache Storage)만 비웁니다. */
 (async function autoUpdate() {
+  const FP_KEY = 'pourpay_fp';   // 지금 내가 들고 있는 파일 지문
   try {
     let needReload = false;
-    let serverVer = null;
 
     // 1) 옛 버전이 남긴 서비스워커 제거 (이 앱은 SW를 쓰지 않음)
     if (navigator.serviceWorker) {
@@ -851,24 +855,43 @@ const APP_VERSION = '2026-07-09-1';
       } catch (e) {}
     }
 
-    // 2) 서버의 최신 index.html 버전과 비교 (캐시 무시)
+    // 2) 헤더만 받아 서버 파일 지문 확인 (본문 450KB를 받지 않으므로 데이터 절약)
+    let fp = null;
     try {
-      const res = await fetch('index.html?_v=' + Date.now(), { cache: 'no-store' });
-      const txt = await res.text();
-      const m = txt.match(/APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
-      serverVer = m && m[1];
-      if (serverVer && serverVer !== APP_VERSION) needReload = true;
+      const res = await fetch('index.html?_t=' + Date.now(), { method: 'HEAD', cache: 'no-store' });
+      const raw = res.headers.get('etag') || res.headers.get('last-modified');
+      if (raw) fp = raw.replace(/[^a-zA-Z0-9]/g, '').slice(-24);
     } catch (e) { /* 오프라인 등은 무시 */ }
+
+    if (fp) {
+      // 지금 화면이 어떤 지문으로 받아진 것인지: 주소의 ?v= → 없으면 저장값
+      const cur = new URLSearchParams(location.search).get('v') || localStorage.getItem(FP_KEY);
+      if (!cur) localStorage.setItem(FP_KEY, fp);
+      else if (cur !== fp) needReload = true;
+    } else {
+      // 2-b) 헤더를 못 읽는 환경이면 예전 방식(APP_VERSION 비교)으로 폴백
+      try {
+        const txt = await (await fetch('index.html?_t=' + Date.now(), { cache: 'no-store' })).text();
+        const m = txt.match(/APP_VERSION\s*=\s*['"]([^'"]+)['"]/);
+        if (m && m[1] !== APP_VERSION) needReload = true;
+      } catch (e) {}
+    }
 
     if (needReload) {
       if (window.caches) {
         try { const ks = await caches.keys(); for (const k of ks) await caches.delete(k); } catch (e) {}
       }
-      // 무한 새로고침 방지: 동일 버전은 세션당 1회만
-      const key = '_upd_' + (serverVer || 'sw');
-      if (!sessionStorage.getItem(key)) {
-        sessionStorage.setItem(key, '1');
-        location.reload();
+      // 무한 새로고침 방지: 동일 지문은 세션당 1회만
+      const guard = '_upd_' + (fp || 'sw');
+      if (!sessionStorage.getItem(guard)) {
+        sessionStorage.setItem(guard, '1');
+        if (fp) {
+          localStorage.setItem(FP_KEY, fp);
+          // 쿼리를 바꿔 새 문서로 강제 로드 (디스크 캐시가 옛 파일을 다시 주는 것을 방지)
+          location.replace(location.pathname + '?v=' + fp);
+        } else {
+          location.reload();
+        }
       }
     }
   } catch (e) {
@@ -994,6 +1017,7 @@ async function loadData() {
         // 🛡️ Overwrite Guard: 현재 메모리 data가 실제로 반영하는 원격 버전 기록
         // (라인 990처럼 데이터 없이 _syncVersion만 올리는 경로에서는 건드리지 않음)
         window._dataContentVersion = data._syncVersion || 0;
+        window._baseline = snapshotBaseline(data);
         updateSyncStatus('connected', '연결됨');
         renderAll();
         
@@ -1232,11 +1256,186 @@ async function applyRemoteData(val) {
     };
     // 🛡️ Overwrite Guard: 전체 데이터를 실제로 받아 적용했으므로 콘텐츠 버전 갱신
     window._dataContentVersion = val._syncVersion || 0;
+    window._baseline = snapshotBaseline(data);
     renderAll();
     if (currentUser?.role === 'manager') {
         restoreUserImages(currentUser.id);
     }
     toast('데이터 동기화됨');
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   3-way 병합 엔진 (2026-08-10 추가)
+   base   = 화면을 불러온 시점의 기준본
+   mine   = 지금 내 화면의 데이터
+   remote = 서버 최신본
+   → remote 위에 "내가 바꾼 것만" 얹어서 반환
+   충돌(같은 칸을 서로 다르게 수정)은 내 값을 채택하고 목록으로 기록.
+   ═══════════════════════════════════════════════════════════════ */
+
+// 충돌 시 화면 알림 여부. true로 바꾸면 겹친 건수를 toast로 알려줌.
+const NOTIFY_ON_CONFLICT = false;
+
+const MERGE_COLLECTIONS = ['managers', 'contractors', 'sites', 'teamMembers', 'siteManagers', 'workers'];
+
+/* 화면에서 열어본 서류는 메모리상 base64로 바뀌어 있다.
+   그대로 비교하면 "내가 수정한 것"으로 잘못 잡히므로,
+   저장 시 쓰이는 __IMG__ 참조 형태로 되돌려 놓고 비교/병합한다. */
+function normalizeImagesForMerge(src) {
+    const d = JSON.parse(JSON.stringify(src || {}));
+    (d.managers || []).forEach(mgr => {
+        ['license', 'bankbook'].forEach(t => {
+            const doc = mgr.bizDocs && mgr.bizDocs[t];
+            if (doc && typeof doc.data === 'string' && doc.data.startsWith('data:')) {
+                doc.data = '__IMG__mgr_' + mgr.id + '_' + t;
+            }
+        });
+        (mgr.additionalBiz || []).forEach((ab, i) => {
+            ['license', 'bankbook'].forEach(t => {
+                const k = t + 'Data';
+                if (typeof ab[k] === 'string' && ab[k].startsWith('data:')) {
+                    ab[k] = '__IMG__mgr_' + mgr.id + '_addBiz' + i + '_' + t;
+                }
+            });
+        });
+    });
+    (d.teamMembers || []).forEach(tm => {
+        ['id', 'bank', 'safety', 'cert', 'family', 'poa'].forEach(t => {
+            const doc = tm.docs && tm.docs[t];
+            if (doc && typeof doc.data === 'string' && doc.data.startsWith('data:')) {
+                doc.data = '__IMG__tm_' + tm.id + '_' + t;
+            }
+        });
+    });
+    return d;
+}
+
+function snapshotBaseline(src) {
+    try {
+        const n = normalizeImagesForMerge(src);
+        const out = {};
+        MERGE_COLLECTIONS.forEach(k => { out[k] = n[k] || []; });
+        out._syncVersion = n._syncVersion;
+        return out;
+    } catch (e) {
+        console.warn('기준본 스냅샷 실패:', e);
+        return null;
+    }
+}
+
+function mergeDeepEqual(a, b) {
+    if (a === b) return true;
+    if (typeof a !== typeof b) return false;
+    if (a === null || b === null) return false;
+    if (typeof a !== 'object') return false;
+    if (Array.isArray(a) !== Array.isArray(b)) return false;
+    const ka = Object.keys(a), kb = Object.keys(b);
+    if (ka.length !== kb.length) return false;
+    for (const k of ka) {
+        if (!Object.prototype.hasOwnProperty.call(b, k)) return false;
+        if (!mergeDeepEqual(a[k], b[k])) return false;
+    }
+    return true;
+}
+
+function isPlainObj(v) { return v !== null && typeof v === 'object' && !Array.isArray(v); }
+
+function mergeValue(base, mine, remote, path, conflicts) {
+    const mineChanged = !mergeDeepEqual(base, mine);
+    const remoteChanged = !mergeDeepEqual(base, remote);
+    if (!mineChanged) return remote;
+    if (!remoteChanged) return mine;
+    if (mergeDeepEqual(mine, remote)) return mine;
+    if (isPlainObj(base) && isPlainObj(mine) && isPlainObj(remote)) {
+        return mergeObject(base, mine, remote, path, conflicts);
+    }
+    conflicts.push({ path: path, 기준: base, 내값: mine, 서버값: remote });
+    return mine;
+}
+
+function mergeObject(base, mine, remote, path, conflicts) {
+    const out = {};
+    const keys = new Set([].concat(Object.keys(base), Object.keys(mine), Object.keys(remote)));
+    keys.forEach(k => {
+        const inB = Object.prototype.hasOwnProperty.call(base, k);
+        const inM = Object.prototype.hasOwnProperty.call(mine, k);
+        const inR = Object.prototype.hasOwnProperty.call(remote, k);
+        const p = path ? path + '.' + k : k;
+
+        if (inB && !inM) {                                  // 내가 지움
+            if (!inR) return;                               // 남도 지움
+            if (mergeDeepEqual(base[k], remote[k])) return;  // 남은 그대로 → 삭제 반영
+            conflicts.push({ path: p, 기준: base[k], 내값: '(삭제)', 서버값: remote[k] });
+            out[k] = remote[k];                              // 남이 수정 중이면 살림
+            return;
+        }
+        if (inB && !inR) {                                   // 남이 지움
+            if (mergeDeepEqual(base[k], mine[k])) return;     // 나도 그대로 → 삭제 반영
+            conflicts.push({ path: p, 기준: base[k], 내값: mine[k], 서버값: '(삭제)' });
+            out[k] = mine[k];
+            return;
+        }
+        if (!inB) {                                          // 새로 생김
+            if (inM && !inR) { out[k] = mine[k]; return; }
+            if (!inM && inR) { out[k] = remote[k]; return; }
+            if (mergeDeepEqual(mine[k], remote[k])) { out[k] = mine[k]; return; }
+            conflicts.push({ path: p, 기준: '(없음)', 내값: mine[k], 서버값: remote[k] });
+            out[k] = mine[k];
+            return;
+        }
+        out[k] = mergeValue(base[k], mine[k], remote[k], p, conflicts);
+    });
+    return out;
+}
+
+function mergeCollection(name, base, mine, remote, conflicts) {
+    const toMap = arr => {
+        const m = new Map();
+        (arr || []).forEach(r => { if (r && r.id != null) m.set(String(r.id), r); });
+        return m;
+    };
+    const bMap = toMap(base), mMap = toMap(mine), rMap = toMap(remote);
+    const out = [];
+    const done = new Set();
+
+    (remote || []).forEach(r => {
+        if (!r || r.id == null) { out.push(r); return; }
+        const id = String(r.id);
+        done.add(id);
+        const b = bMap.get(id), m = mMap.get(id);
+        if (!bMap.has(id)) {                                 // 남이 추가
+            out.push(mMap.has(id) ? mergeValue(r, m, r, name + '[' + id + ']', conflicts) : r);
+            return;
+        }
+        if (!mMap.has(id)) {                                 // 내가 삭제
+            if (mergeDeepEqual(b, r)) return;                // 남은 그대로 → 삭제 반영
+            conflicts.push({ path: name + '[' + id + ']', 기준: '(있음)', 내값: '(삭제)', 서버값: '(수정됨)' });
+            out.push(r);
+            return;
+        }
+        out.push(mergeValue(b, m, r, name + '[' + id + ']', conflicts));
+    });
+
+    mMap.forEach((m, id) => {
+        if (done.has(id)) return;
+        if (!bMap.has(id)) { out.push(m); return; }           // 내가 추가한 신규
+        if (mergeDeepEqual(bMap.get(id), m)) return;          // 남이 지웠고 나도 안 건드림
+        conflicts.push({ path: name + '[' + id + ']', 기준: '(있음)', 내값: '(수정됨)', 서버값: '(삭제)' });
+        out.push(m);
+    });
+
+    return out;
+}
+
+function mergeSiteData(base, mine, remote) {
+    const conflicts = [];
+    const m = normalizeImagesForMerge(mine);
+    const out = {};
+    MERGE_COLLECTIONS.forEach(name => {
+        out[name] = mergeCollection(name, base[name] || [], m[name] || [], remote[name] || [], conflicts);
+    });
+    out.attendance = remote.attendance || [];
+    return { merged: out, conflicts: conflicts };
 }
 
 async function saveData() {
@@ -1342,10 +1541,64 @@ async function saveData() {
         // 🛡️ Overwrite Guard (read-before-write): 전체 블롭 set 직전 원격 최신 버전 확인
         // 내가 로드한 이후 다른 세션이 저장했다면( remote > 내 콘텐츠버전 ),
         // 통째로 덮어쓰면 그 변경분이 유실되므로 저장을 중단하고 최신본을 다시 받는다.
-        try {
-            const remoteVerSnap = await db.ref('siteData/_syncVersion').once('value');
-            const remoteVer = remoteVerSnap.val() || 0;
+        // (2026-08-10) 가드 확인이 네트워크 오류로 실패하면 예전엔 그냥 저장을 진행했다.
+        // 통신 불안정 시 조용한 덮어쓰기가 남아 있어, 1회 재시도 후에도 실패하면 저장을 보류한다.
+        let remoteVer = null;
+        for (let attempt = 0; attempt < 2 && remoteVer === null; attempt++) {
+            try {
+                const snap = await db.ref('siteData/_syncVersion').once('value');
+                remoteVer = snap.val() || 0;
+            } catch (guardErr) {
+                console.warn(`Overwrite guard check failed (attempt ${attempt + 1}):`, guardErr);
+                if (attempt === 0) await new Promise(r => setTimeout(r, 1500));
+            }
+        }
+        if (remoteVer === null) {
+            updateSyncStatus('error', '저장 보류');
+            toast('⚠️ 서버 확인 실패로 저장을 보류했습니다. 통신 상태를 확인한 뒤 다시 저장해주세요. (입력 내용은 화면에 그대로 남아 있습니다)');
+            return; // 덮어쓰기 중단 (finally에서 _isSaving 해제)
+        }
+        {
             const contentVer = window._dataContentVersion || 0;
+
+            // (2026-08-10) 3-way 병합: 먼저 저장된 변경 위에 "내가 바꾼 것만" 얹어 이어서 저장한다.
+            if (remoteVer > contentVer && window._baseline) {
+                window._mergeTries = (window._mergeTries || 0) + 1;
+                if (window._mergeTries <= 3) {
+                    try {
+                        const freshSnap = await db.ref('siteData').once('value');
+                        const remoteVal = freshSnap.val();
+                        if (!remoteVal) throw new Error('원격 데이터 없음');
+
+                        const r = mergeSiteData(window._baseline, data, remoteVal);
+                        const before = (data.sites || []).length + (data.workers || []).length;
+                        const after = (r.merged.sites || []).length + (r.merged.workers || []).length;
+                        if (before > 0 && after < before * 0.5) throw new Error('병합 결과가 비정상적으로 작음');
+
+                        r.merged._lastUpdated = data._lastUpdated;
+                        r.merged._lastChange = data._lastChange;
+                        r.merged._syncVersion = (remoteVal._syncVersion || 0) + 1;
+                        data = r.merged;
+                        window._dataContentVersion = remoteVal._syncVersion || 0;
+
+                        if (r.conflicts.length) {
+                            window._lastConflicts = r.conflicts;
+                            console.warn(`⚠️ 동시 수정 ${r.conflicts.length}건 — 내 값 채택 (window._lastConflicts 로 확인)`, r.conflicts);
+                            if (NOTIFY_ON_CONFLICT) toast(`⚠️ 동시 수정 ${r.conflicts.length}건은 내 값으로 저장했습니다`);
+                        } else {
+                            console.log(`🔀 자동 병합 완료 (v${remoteVer} 위에 재적용)`);
+                        }
+                        renderAll();
+                        window._pendingSave = true;   // finally에서 병합본으로 재저장
+                        return;
+                    } catch (mergeErr) {
+                        console.error('병합 실패, 기존 방식으로 보류:', mergeErr);
+                    }
+                } else {
+                    console.warn('병합 재시도 한도 초과 — 저장 보류');
+                }
+            }
+
             if (remoteVer > contentVer) {
                 console.warn(`⛔ Overwrite blocked: remote v${remoteVer} > local content v${contentVer}`);
                 updateSyncStatus('error', '저장 보류');
@@ -1370,9 +1623,6 @@ async function saveData() {
                 }
                 return; // 덮어쓰기 중단 (finally에서 _isSaving 해제)
             }
-        } catch (guardErr) {
-            // 가드 확인 자체가 실패하면(네트워크 등) 저장을 막지는 않되 경고만 남김
-            console.warn('Overwrite guard check failed, proceeding:', guardErr);
         }
 
         const savePromises = [db.ref('siteData').set(dataClone)];
@@ -1386,11 +1636,36 @@ async function saveData() {
         // 🛡️ Overwrite Guard: 방금 내가 쓴 버전이 곧 내 콘텐츠의 최신 버전
         window._dataContentVersion = data._syncVersion || 0;
 
+        // (2026-08-10) 백업이 용량 초과로 조용히 실패하던 문제:
+        // 1차 실패 시 서류/이미지 메타를 뺀 축소본으로 재시도하고, 그래도 실패하면 화면에 알린다.
         try {
             localStorage.setItem('siteData_backup', JSON.stringify(dataClone));
             localStorage.setItem('siteData_backup_ts', new Date().toISOString());
-        } catch(lsErr) {
-            console.warn('localStorage 백업 실패 (용량 초과 가능):', lsErr);
+            localStorage.setItem('siteData_backup_kind', 'full');
+            window._baseline = snapshotBaseline(data);
+            window._mergeTries = 0;
+        } catch (lsErr) {
+            console.warn('localStorage 백업 실패, 축소본으로 재시도:', lsErr);
+            try {
+                const slim = JSON.parse(JSON.stringify(dataClone));
+                (slim.teamMembers || []).forEach(tm => { delete tm.docs; });
+                (slim.managers || []).forEach(m => {
+                    ['licenseData', 'bankbookData', 'sealData', 'idCardData'].forEach(k => delete m[k]);
+                    (m.additionalBiz || []).forEach(ab => { delete ab.licenseData; delete ab.bankbookData; });
+                });
+                localStorage.removeItem('siteData_backup');
+                localStorage.setItem('siteData_backup', JSON.stringify(slim));
+                localStorage.setItem('siteData_backup_ts', new Date().toISOString());
+                localStorage.setItem('siteData_backup_kind', 'slim');
+                console.warn('축소본 백업 성공 (서류 이미지 메타 제외)');
+            } catch (lsErr2) {
+                console.error('localStorage 백업 완전 실패:', lsErr2);
+                localStorage.setItem('siteData_backup_kind', 'failed');
+                if (!window._backupWarned) {
+                    window._backupWarned = true;
+                    toast('⚠️ 브라우저 로컬 백업 공간이 부족합니다. (Firebase 저장은 정상) 관리자에게 알려주세요.');
+                }
+            }
         }
 
         updateSyncStatus('saved', '저장완료');
@@ -2834,7 +3109,7 @@ function renderSiteList(sites) {
             <div style="display:flex; align-items:center; gap:12px; flex:1;">
                 <div style="background:${typeBgColor}; color:${typeColor}; padding:8px 12px; border-radius:6px; font-weight:700; font-size:12px; min-width:70px; text-align:center;">${typeLabel}</div>
                 <div class="list-item-info">
-                    <h4 style="font-size:15px; font-weight:700;">${s.name || '-'} ${s.siteType === 'consulting' && s.isTechConsulting ? '<span style="display:inline-block; font-size:10px; padding:2px 6px; border-radius:4px; background:#FAEEDA; color:#854F0B; border:0.5px solid #FAC775; font-weight:600; vertical-align:middle;">기술자문</span>' : ''} ${isPaymentCompleted ? '<span style="color:#059669; font-size:11px;">✓완료</span>' : ''}</h4>
+                    <h4 style="font-size:15px; font-weight:700;">${s.name || '-'} ${s.siteType === 'consulting' && s.isTechConsulting ? '<span style="display:inline-block; font-size:10px; padding:2px 6px; border-radius:4px; background:#FAEEDA; color:#854F0B; border:0.5px solid #FAC775; font-weight:600; vertical-align:middle;">기술자문</span>' : ''} ${s.siteType === 'consulting' && s.isTechComposite ? '<span style="display:inline-block; font-size:10px; padding:2px 6px; border-radius:4px; background:#EDE9FE; color:#5B21B6; border:0.5px solid #C4B5FD; font-weight:600; vertical-align:middle;">복합공종</span>' : ''} ${isPaymentCompleted ? '<span style="color:#059669; font-size:11px;">✓완료</span>' : ''}</h4>
                     <p>📍 ${s.contractor || '-'} | 👷 ${mgrNames || '미배정'}</p>
                 </div>
             </div>
@@ -3169,10 +3444,16 @@ function renderSiteInfoTab(s, assigns) {
             </div>
             ${siteType === 'consulting' ? `
             <div style="background:var(--bg); border:1px solid var(--border); border-radius:2px; padding:12px; margin-bottom:10px;">
-                <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; font-weight:600;">
-                    <input type="checkbox" ${s.isTechConsulting ? 'checked' : ''} onchange="toggleTechConsulting('${s.id}', this.checked)" style="width:18px; height:18px; accent-color:var(--primary);">
-                    기술자문 컨설팅 현장
-                </label>
+                <div style="display:flex; align-items:center; gap:20px; flex-wrap:wrap;">
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; font-weight:600;">
+                        <input type="checkbox" ${s.isTechConsulting ? 'checked' : ''} onchange="toggleTechConsulting('${s.id}', this.checked)" style="width:18px; height:18px; accent-color:var(--primary);">
+                        기술자문(컨설팅)
+                    </label>
+                    <label style="display:flex; align-items:center; gap:8px; cursor:pointer; font-size:13px; font-weight:600;">
+                        <input type="checkbox" ${s.isTechComposite ? 'checked' : ''} onchange="toggleTechComposite('${s.id}', this.checked)" style="width:18px; height:18px; accent-color:#5B21B6;">
+                        기술자문(복합공종)
+                    </label>
+                </div>
                 ${s.isTechConsulting ? `
                 <div style="margin-top:10px; padding:12px; background:white; border:1px solid var(--border); border-radius:2px;">
                     <div class="form-group" style="margin-bottom:0;">
@@ -3180,6 +3461,16 @@ function renderSiteInfoTab(s, assigns) {
                         <input type="text" value="${s.techExecutionAmount ? Number(s.techExecutionAmount).toLocaleString() : ''}" placeholder="실행금액 입력"
                             onchange="updateTechExecutionAmount('${s.id}', this.value)"
                             style="padding:10px; border:1px solid var(--border); border-radius:2px; font-size:14px; font-weight:600;">
+                    </div>
+                </div>
+                ` : ''}
+                ${s.isTechComposite ? `
+                <div style="margin-top:10px; padding:12px; background:white; border:1px solid var(--border); border-radius:2px;">
+                    <div class="form-group" style="margin-bottom:0;">
+                        <label style="font-size:11px; font-weight:600; color:var(--text-light);">메모</label>
+                        <textarea rows="3" placeholder=""
+                            onchange="updateTechCompositeMemo('${s.id}', this.value)"
+                            style="padding:10px; border:1px solid var(--border); border-radius:2px; font-size:14px; line-height:1.5; resize:vertical; width:100%; box-sizing:border-box; font-family:inherit;">${escapeHtml(s.techCompositeMemo || '')}</textarea>
                     </div>
                 </div>
                 ` : ''}
@@ -3904,15 +4195,54 @@ function toggleLaborContract(smId) {
     toast(sm.hasLaborContract ? '근로계약서 완료' : '근로계약서 미작성');
 }
 
+/* HTML 이스케이프 (템플릿 문자열에 사용자 입력을 넣을 때) */
+function escapeHtml(str) {
+    return String(str == null ? '' : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
 function toggleTechConsulting(siteId, checked) {
     const site = data.sites.find(s => s.id === siteId);
     if (!site) return;
     site.isTechConsulting = checked;
     if (!checked) delete site.techExecutionAmount;
+    // 기술자문(컨설팅)과 기술자문(복합공종)은 동시 선택 불가
+    if (checked && site.isTechComposite) {
+        site.isTechComposite = false;
+        delete site.techCompositeMemo;
+    }
     currentSiteTab = 'info';
     refreshSiteDetail();
     saveData();
-    toast(checked ? '기술자문 컨설팅 설정' : '기술자문 컨설팅 해제');
+    toast(checked ? '기술자문(컨설팅) 설정' : '기술자문(컨설팅) 해제');
+}
+
+function toggleTechComposite(siteId, checked) {
+    const site = data.sites.find(s => s.id === siteId);
+    if (!site) return;
+    site.isTechComposite = checked;
+    if (!checked) delete site.techCompositeMemo;
+    // 기술자문(복합공종)과 기술자문(컨설팅)은 동시 선택 불가
+    if (checked && site.isTechConsulting) {
+        site.isTechConsulting = false;
+        delete site.techExecutionAmount;
+    }
+    currentSiteTab = 'info';
+    refreshSiteDetail();
+    saveData();
+    toast(checked ? '기술자문(복합공종) 설정' : '기술자문(복합공종) 해제');
+}
+
+function updateTechCompositeMemo(siteId, value) {
+    const site = data.sites.find(s => s.id === siteId);
+    if (!site) return;
+    site.techCompositeMemo = (value || '').trim();
+    saveData();
+    toast('메모 저장');
 }
 
 function updateTechExecutionAmount(siteId, value) {
@@ -4482,6 +4812,8 @@ async function saveSite() {
             siteData.readyChecks = existing.readyChecks;
             siteData.isTechConsulting = existing.isTechConsulting;
             siteData.techExecutionAmount = existing.techExecutionAmount;
+            siteData.isTechComposite = existing.isTechComposite;
+            siteData.techCompositeMemo = existing.techCompositeMemo;
             siteData.memo = existing.memo || '';
             if (!siteData.siteManagerName && existing.siteManagerName) siteData.siteManagerName = existing.siteManagerName;
         }
