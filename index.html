@@ -512,12 +512,17 @@
             </div>
             
             <div id="constructionSection">
-                <div class="section-title">🔧 공종별 물량</div>
+                <div class="section-title" style="display:flex; align-items:center; justify-content:space-between;">
+                    <span>🔧 공종별 물량</span>
+                    <button class="btn btn-outline btn-sm" onclick="toggleRateBasePanel()" style="font-weight:500;">⚙️ 기준단가</button>
+                </div>
+                <div id="rateBasePanel" class="hidden" style="margin-bottom:8px; padding:10px; background:#f8fafc; border:1px solid var(--border); border-radius:2px;"></div>
                 <div id="constructionList"></div>
                 <div style="display:flex; gap:4px; flex-wrap:wrap; margin-top:6px;">
                     <button class="btn btn-outline btn-sm" onclick="addConstruction('slab')">+ 슬라브</button>
                     <button class="btn btn-outline btn-sm" onclick="addConstruction('single')">+ 싱글</button>
                     <button class="btn btn-outline btn-sm" onclick="addConstruction('metal')">+ 금속기와</button>
+                    <button class="btn btn-outline btn-sm" onclick="addConstruction('drain')">+ 배수로</button>
                     <button class="btn btn-outline btn-sm" onclick="addConstruction('pvc')">+ PVC</button>
                     <button class="btn btn-outline btn-sm" onclick="addConstruction('other')">+ 기타</button>
                 </div>
@@ -532,6 +537,7 @@
                         <option value="slab">슬라브</option>
                         <option value="single">싱글</option>
                         <option value="metal">금속기와</option>
+                        <option value="drain">배수로</option>
                         <option value="pvc">PVC</option>
                         <option value="other">기타</option>
                     </select>
@@ -745,6 +751,7 @@
                 <button class="btn btn-outline btn-sm" onclick="addMgrConstruction('slab')">+ 슬라브</button>
                 <button class="btn btn-outline btn-sm" onclick="addMgrConstruction('single')">+ 싱글</button>
                 <button class="btn btn-outline btn-sm" onclick="addMgrConstruction('metal')">+ 금속기와</button>
+                <button class="btn btn-outline btn-sm" onclick="addMgrConstruction('drain')">+ 배수로</button>
                 <button class="btn btn-outline btn-sm" onclick="addMgrConstruction('pvc')">+ PVC</button>
                 <button class="btn btn-outline btn-sm" onclick="addMgrConstruction('other')">+ 기타</button>
             </div>
@@ -913,7 +920,42 @@ firebase.initializeApp(firebaseConfig);
 const db = firebase.database();
 
 /* 상수 */
-const CONST_TYPES = { slab: '슬라브', single: '싱글', metal: '금속기와', pvc: 'PVC', other: '기타' };
+const CONST_TYPES = { slab: '슬라브', single: '싱글', metal: '금속기와', pvc: 'PVC', drain: '배수로', other: '기타' };
+
+/* ── 공종별 기준단가 (노임협의기준 2026-09) ──────────────────────
+   최대 노임 = 기본 최대노임 + (현장 컨설팅단가 − 기본 컨설팅단가)
+   단위: 원/㎡. 자재 단가 상승분이 반영된 금액이므로 변경 가능. */
+const DEFAULT_LABOR_RATE_BASE = {
+    single: { consult: 27500, maxLabor: 11000 },
+    metal:  { consult: 37000, maxLabor: 15000 },
+    slab:   { consult: 30500, maxLabor: 11000 },
+    drain:  { consult: 32500, maxLabor: 13000 }
+};
+
+/* 기술자문(복합공종) 적용 공종 목록 */
+const TECH_COMPOSITE_WORKS = [
+    { key: 'roof',    label: '옥상방수' },
+    { key: 'repaint', label: '재도장' },
+    { key: 'epoxy',   label: '에폭시' },
+    { key: 'pvc',     label: 'PVC' },
+    { key: 'parking', label: '주차장' },
+    { key: 'direct',  label: '기타 직영공사' },
+    { key: 'custom',  label: '직접입력' }
+];
+
+/* 해당 공종의 최대 노임단가 산출. 기준 없는 공종(PVC·기타)은 null */
+function calcMaxLabor(type, consultPrice) {
+    const base = (data.laborRateBase || DEFAULT_LABOR_RATE_BASE)[type];
+    if (!base) return null;
+    const cp = Number(consultPrice) || 0;
+    if (!cp) return base.maxLabor;                       // 컨설팅단가 미입력 → 기본 한도
+    return base.maxLabor + (cp - base.consult);
+}
+
+/* 소장님 로그인 시에는 컨설팅단가·최대노임을 노출하지 않음 */
+function canSeeLaborCap() {
+    return currentUser && currentUser.role !== 'manager';
+}
 const EXPENSE_TYPES = { safety: '안전관리비', equipment: '장비대', waste: '폐기물', etc: '기타' };
 const PAY_TYPES = ['advance', 'interim', 'balance'];
 const PAY_NAMES = { advance: '선급금', interim: '중도금', balance: '잔금', report: '노임신고' };
@@ -1003,6 +1045,7 @@ async function loadData() {
                 siteManagers: val.siteManagers || [],
                 workers: val.workers || [],
                 attendance: val.attendance || [],
+                laborRateBase: val.laborRateBase || JSON.parse(JSON.stringify(DEFAULT_LABOR_RATE_BASE)),
                 _lastUpdated: val._lastUpdated,
                 _syncVersion: val._syncVersion
             };
@@ -1251,6 +1294,7 @@ async function applyRemoteData(val) {
         siteManagers: val.siteManagers || [],
         workers: val.workers || [],
         attendance: val.attendance || [],
+        laborRateBase: val.laborRateBase || JSON.parse(JSON.stringify(DEFAULT_LABOR_RATE_BASE)),
         _lastUpdated: val._lastUpdated,
         _syncVersion: val._syncVersion
     };
@@ -1315,6 +1359,7 @@ function snapshotBaseline(src) {
         const n = normalizeImagesForMerge(src);
         const out = {};
         MERGE_COLLECTIONS.forEach(k => { out[k] = n[k] || []; });
+        out.laborRateBase = n.laborRateBase || {};
         out._syncVersion = n._syncVersion;
         return out;
     } catch (e) {
@@ -1435,6 +1480,11 @@ function mergeSiteData(base, mine, remote) {
         out[name] = mergeCollection(name, base[name] || [], m[name] || [], remote[name] || [], conflicts);
     });
     out.attendance = remote.attendance || [];
+    // 컬렉션이 아닌 최상위 설정값도 병합 대상에 포함 (누락 시 유실됨)
+    out.laborRateBase = mergeValue(
+        base.laborRateBase || {}, m.laborRateBase || {}, remote.laborRateBase || {},
+        'laborRateBase', conflicts
+    );
     return { merged: out, conflicts: conflicts };
 }
 
@@ -3466,12 +3516,21 @@ function renderSiteInfoTab(s, assigns) {
                 ` : ''}
                 ${s.isTechComposite ? `
                 <div style="margin-top:10px; padding:12px; background:white; border:1px solid var(--border); border-radius:2px;">
-                    <div class="form-group" style="margin-bottom:0;">
-                        <label style="font-size:11px; font-weight:600; color:var(--text-light);">메모</label>
-                        <textarea rows="3" placeholder=""
-                            onchange="updateTechCompositeMemo('${s.id}', this.value)"
-                            style="padding:10px; border:1px solid var(--border); border-radius:2px; font-size:14px; line-height:1.5; resize:vertical; width:100%; box-sizing:border-box; font-family:inherit;">${escapeHtml(s.techCompositeMemo || '')}</textarea>
+                    <div style="font-size:11px; font-weight:600; color:var(--text-light); margin-bottom:8px;">
+                        적용 공종 <span style="color:#dc2626;">*</span> <span style="font-weight:500;">여러 개 고를 수 있습니다</span>
                     </div>
+                    <div style="display:flex; gap:8px; flex-wrap:wrap;">
+                        ${TECH_COMPOSITE_WORKS.map(w => `
+                        <label style="display:flex; align-items:center; gap:6px; cursor:pointer; font-size:12px; padding:6px 10px; border:1px solid var(--border); border-radius:6px; background:${(s.techCompositeWorks||[]).includes(w.key) ? '#F5F3FF' : 'white'}; border-color:${(s.techCompositeWorks||[]).includes(w.key) ? '#C4B5FD' : 'var(--border)'};">
+                            <input type="checkbox" ${(s.techCompositeWorks||[]).includes(w.key) ? 'checked' : ''} onchange="toggleTechCompositeWork('${s.id}','${w.key}', this.checked)" style="width:15px; height:15px; accent-color:#5B21B6;">
+                            ${w.label}
+                        </label>`).join('')}
+                    </div>
+                    ${(s.techCompositeWorks||[]).includes('custom') ? `
+                    <input type="text" value="${escapeHtml(s.techCompositeMemo || '')}" placeholder="공종명 입력"
+                        onchange="updateTechCompositeMemo('${s.id}', this.value)"
+                        style="margin-top:8px; padding:8px 10px; border:1px solid var(--border); border-radius:2px; font-size:13px; width:100%; box-sizing:border-box; font-family:inherit;">
+                    ` : ''}
                 </div>
                 ` : ''}
             </div>
@@ -3527,7 +3586,13 @@ function renderSiteInfoTab(s, assigns) {
         
         ${s.constructions?.length ? `<div class="card"><div class="card-header"><div class="card-title">🔧 ${siteType === 'transfer' ? '공종' : '공종별 물량'}</div></div>${s.constructions.map(c => siteType === 'transfer' ?
             `<div style="display:flex; padding:6px; background:#f8fafc; border-radius:4px; margin-bottom:3px; font-size:11px;"><span>${c.name || CONST_TYPES[c.type]}</span></div>` :
-            `<div style="display:flex; justify-content:space-between; padding:6px; background:#f8fafc; border-radius:4px; margin-bottom:3px; font-size:11px;"><span>${c.name || CONST_TYPES[c.type]}</span><span>${(c.qty || 0).toLocaleString()}${c.unit || '㎡'} × ${(c.price || 0).toLocaleString()}원 = <b>${(c.cost || 0).toLocaleString()}원</b></span></div>`
+            `<div style="display:flex; justify-content:space-between; padding:6px; background:#f8fafc; border-radius:4px; margin-bottom:3px; font-size:11px;"><span>${c.name || CONST_TYPES[c.type]}${(() => {
+                if (!canSeeLaborCap()) return '';
+                const ml = calcMaxLabor(c.type, c.consultPrice);
+                if (ml === null) return '';
+                const over = (Number(c.price) || 0) > ml;
+                return `<span style="margin-left:6px; font-size:10px; color:${over ? '#dc2626' : 'var(--text-light)'}; font-weight:${over ? '700' : '500'};">최대 ${ml.toLocaleString()}${over ? ' ⚠️' : ''}</span>`;
+            })()}</span><span>${(c.qty || 0).toLocaleString()}${c.unit || '㎡'} × ${(c.price || 0).toLocaleString()}원 = <b>${(c.cost || 0).toLocaleString()}원</b></span></div>`
         ).join('')}</div>` : ''}
         
         ${(s.unitPriceMemo || s.unitPrices?.length) ? `<div class="card"><div class="card-header"><div class="card-title">💲 단가 정보</div><button class="btn btn-outline btn-sm" onclick="openSiteModal('${s.id}')">수정</button></div>
@@ -4214,6 +4279,7 @@ function toggleTechConsulting(siteId, checked) {
     if (checked && site.isTechComposite) {
         site.isTechComposite = false;
         delete site.techCompositeMemo;
+        delete site.techCompositeWorks;
     }
     currentSiteTab = 'info';
     refreshSiteDetail();
@@ -4225,7 +4291,7 @@ function toggleTechComposite(siteId, checked) {
     const site = data.sites.find(s => s.id === siteId);
     if (!site) return;
     site.isTechComposite = checked;
-    if (!checked) delete site.techCompositeMemo;
+    if (!checked) { delete site.techCompositeMemo; delete site.techCompositeWorks; }
     // 기술자문(복합공종)과 기술자문(컨설팅)은 동시 선택 불가
     if (checked && site.isTechConsulting) {
         site.isTechConsulting = false;
@@ -4235,6 +4301,20 @@ function toggleTechComposite(siteId, checked) {
     refreshSiteDetail();
     saveData();
     toast(checked ? '기술자문(복합공종) 설정' : '기술자문(복합공종) 해제');
+}
+
+function toggleTechCompositeWork(siteId, key, checked) {
+    const site = data.sites.find(s => s.id === siteId);
+    if (!site) return;
+    const list = Array.isArray(site.techCompositeWorks) ? site.techCompositeWorks.slice() : [];
+    const i = list.indexOf(key);
+    if (checked && i < 0) list.push(key);
+    if (!checked && i >= 0) list.splice(i, 1);
+    site.techCompositeWorks = list;
+    if (key === 'custom' && !checked) delete site.techCompositeMemo;
+    currentSiteTab = 'info';
+    refreshSiteDetail();
+    saveData();
 }
 
 function updateTechCompositeMemo(siteId, value) {
@@ -4631,16 +4711,22 @@ function addConstruction(type) {
         if (!customName || !customName.trim()) return;
         tempConstructions.push({ id: 'c_' + Date.now(), type, name: customName.trim(), qty: 0, price: 0, cost: 0 });
     } else {
-        tempConstructions.push({ id: 'c_' + Date.now(), type, name: CONST_TYPES[type], qty: 0, price: 0, cost: 0 });
+        tempConstructions.push({ id: 'c_' + Date.now(), type, name: CONST_TYPES[type], qty: 0, price: 0, cost: 0, consultPrice: 0 });
     }
     renderConstructions();
 }
 
 function renderConstructions() {
-    document.getElementById('constructionList').innerHTML = tempConstructions.map((c, i) => `
-        <div class="item-row">
-            <div class="label" style="display:flex; align-items:center; gap:4px;">
-                ${c.type === 'other' ? `<input type="text" value="${c.name || ''}" placeholder="공종명" style="width:70px; padding:4px; font-size:11px; border:1px solid var(--border); border-radius:3px;" onchange="updateConstructionName(${i}, this.value)">` : c.name}
+    const showCap = canSeeLaborCap();
+    document.getElementById('constructionList').innerHTML = tempConstructions.map((c, i) => {
+        const maxLabor = showCap ? calcMaxLabor(c.type, c.consultPrice) : null;
+        const over = maxLabor !== null && (Number(c.price) || 0) > maxLabor;
+        const capHtml = maxLabor === null ? '' :
+            `<div style="font-size:10px; margin-top:2px; color:${over ? '#dc2626' : 'var(--text-light)'}; font-weight:${over ? '700' : '500'};">최대 ${maxLabor.toLocaleString()}${over ? ' ⚠️초과' : ''}</div>`;
+        return `
+        <div class="item-row" style="align-items:flex-start;">
+            <div class="label" style="display:flex; align-items:center; gap:4px; padding-top:6px;">
+                ${c.type === 'other' ? `<input type="text" value="${escapeHtml(c.name || '')}" placeholder="공종명" style="width:70px; padding:4px; font-size:11px; border:1px solid var(--border); border-radius:3px;" onchange="updateConstructionName(${i}, this.value)">` : c.name}
             </div>
             <div style="display:flex; gap:2px; align-items:center;">
                 <input type="text" value="${c.qty || ''}" placeholder="물량" onchange="updateConstruction(${i},'qty',this.value)" onblur="updateConstruction(${i},'qty',this.value)" style="width:60px;">
@@ -4651,11 +4737,62 @@ function renderConstructions() {
                     <option value="식" ${c.unit === '식' ? 'selected' : ''}>식</option>
                 </select>
             </div>
-            <input type="text" value="${c.price ? c.price.toLocaleString() : ''}" placeholder="단가" onchange="updateConstructionPrice(${i},this)" onblur="updateConstructionPrice(${i},this)">
+            ${showCap ? `<input type="text" value="${c.consultPrice ? Number(c.consultPrice).toLocaleString() : ''}" placeholder="컨설팅단가" title="이 현장에 책정된 컨설팅 단가 (컨설팅내역서 최종본)" onchange="updateConstructionConsultPrice(${i},this)" onblur="updateConstructionConsultPrice(${i},this)" style="background:#fffbeb;">` : ''}
+            <div>
+                <input type="text" value="${c.price ? c.price.toLocaleString() : ''}" placeholder="노무비단가" onchange="updateConstructionPrice(${i},this)" onblur="updateConstructionPrice(${i},this)" style="${over ? 'border-color:#dc2626;' : ''}">
+                ${capHtml}
+            </div>
             <input type="text" id="constCost_${i}" value="${c.cost ? c.cost.toLocaleString() : ''}" placeholder="금액" readonly style="background:#e0f2fe;">
             <button class="del-btn" onclick="removeConstruction(${i})">×</button>
+        </div>`;
+    }).join('') || '<div style="color:var(--text-light); font-size:11px; padding:8px;">공종을 추가하세요</div>';
+}
+
+/* 컨설팅 단가 입력 → 최대 노임 재계산 */
+function updateConstructionConsultPrice(idx, el) {
+    const c = tempConstructions[idx];
+    if (!c) return;
+    c.consultPrice = parseInt(String(el.value).replace(/[^\d]/g, '')) || 0;
+    renderConstructions();
+}
+
+/* 기준단가 설정 패널 */
+function toggleRateBasePanel() {
+    const el = document.getElementById('rateBasePanel');
+    if (!el) return;
+    if (el.classList.contains('hidden')) { renderRateBasePanel(); el.classList.remove('hidden'); }
+    else { el.classList.add('hidden'); }
+}
+
+function renderRateBasePanel() {
+    const el = document.getElementById('rateBasePanel');
+    if (!el) return;
+    if (!data.laborRateBase) data.laborRateBase = JSON.parse(JSON.stringify(DEFAULT_LABOR_RATE_BASE));
+    const rows = Object.keys(DEFAULT_LABOR_RATE_BASE).map(type => {
+        const b = data.laborRateBase[type] || DEFAULT_LABOR_RATE_BASE[type];
+        return `<div style="display:grid; grid-template-columns:70px 1fr 1fr; gap:6px; align-items:center; margin-bottom:4px;">
+            <span style="font-size:11px; font-weight:600;">${CONST_TYPES[type]}</span>
+            <input type="text" value="${(b.consult || 0).toLocaleString()}" onchange="updateRateBase('${type}','consult',this)" style="font-size:11px; padding:5px;">
+            <input type="text" value="${(b.maxLabor || 0).toLocaleString()}" onchange="updateRateBase('${type}','maxLabor',this)" style="font-size:11px; padding:5px;">
+        </div>`;
+    }).join('');
+    el.innerHTML = `
+        <div style="font-size:11px; color:var(--text-light); margin-bottom:6px;">공종별 기준단가 (원/㎡) — 최대 노임 = 기본 최대노임 + (현장 컨설팅단가 − 기본 컨설팅단가)</div>
+        <div style="display:grid; grid-template-columns:70px 1fr 1fr; gap:6px; margin-bottom:4px; font-size:10px; color:var(--text-light); font-weight:600;">
+            <span>공종</span><span>기본 컨설팅단가</span><span>기본 최대노임</span>
         </div>
-    `).join('') || '<div style="color:var(--text-light); font-size:11px; padding:8px;">공종을 추가하세요</div>';
+        ${rows}
+        <div style="font-size:10px; color:var(--text-light); margin-top:6px;">※ 자재 단가 상승분이 반영된 금액입니다. 기준이 바뀌면 여기서 수정하세요.</div>`;
+}
+
+function updateRateBase(type, field, el) {
+    if (!data.laborRateBase) data.laborRateBase = JSON.parse(JSON.stringify(DEFAULT_LABOR_RATE_BASE));
+    if (!data.laborRateBase[type]) data.laborRateBase[type] = Object.assign({}, DEFAULT_LABOR_RATE_BASE[type]);
+    data.laborRateBase[type][field] = parseInt(String(el.value).replace(/[^\d]/g, '')) || 0;
+    saveData();
+    renderRateBasePanel();
+    renderConstructions();
+    toast('기준단가 저장');
 }
 
 function updateConstructionName(idx, name) {
@@ -4814,6 +4951,7 @@ async function saveSite() {
             siteData.techExecutionAmount = existing.techExecutionAmount;
             siteData.isTechComposite = existing.isTechComposite;
             siteData.techCompositeMemo = existing.techCompositeMemo;
+            siteData.techCompositeWorks = existing.techCompositeWorks;
             siteData.memo = existing.memo || '';
             if (!siteData.siteManagerName && existing.siteManagerName) siteData.siteManagerName = existing.siteManagerName;
         }
