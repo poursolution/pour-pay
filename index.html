@@ -7693,6 +7693,8 @@ function renderMgrSiteInfo(site, sm) {
         // 소장님 2명 이상: 개별 배정된 공종만 표시
         displayConstructions = sm.constructions || [];
     }
+    // 노무비단가가 0원인 항목(다른 공종 단가에 포함해 책정한 부대시설 등)은 소장님께 노출하지 않음
+    displayConstructions = displayConstructions.filter(c => (Number(c.price) || 0) > 0);
     
     return `
         <div class="card">
