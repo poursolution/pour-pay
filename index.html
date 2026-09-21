@@ -128,7 +128,7 @@
         .close-btn { width: 28px; height: 28px; border: none; background: var(--bg); border-radius: 2px; cursor: pointer; font-size: 16px; }
         
         /* 공종 입력 */
-        .item-row { display: grid; grid-template-columns: 80px 1fr 1fr 1fr 32px; gap: 5px; padding: 8px; background: var(--bg); border-radius: 2px; margin-bottom: 5px; align-items: center; }
+        .item-row { display: grid; grid-template-columns: 80px 118px 1fr 1fr 1fr 30px; gap: 5px; padding: 8px; background: var(--bg); border-radius: 2px; margin-bottom: 5px; align-items: center; }
         .item-row .label { font-size: 11px; font-weight: 600; color: var(--primary); }
         .item-row input { padding: 6px; border: 1px solid var(--border); border-radius: 2px; font-size: 11px; }
         .item-row .del-btn { width: 24px; height: 24px; border: none; background: #fee2e2; color: var(--danger); border-radius: 2px; cursor: pointer; font-size: 12px; }
@@ -3622,11 +3622,11 @@ function renderSiteInfoTab(s, assigns) {
             if (!m.hasEst && !m.over) return '';
             const ok = m.margin >= m.over;
             const rest = m.margin - m.over;
-            return `<div style="margin-top:6px; padding:8px 10px; background:#EFF6FF; border-radius:4px; display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; font-size:11px;">
-                <span style="color:#1D4ED8;">부대시설 차이 합계 <b style="font-size:12px;">${m.margin.toLocaleString()}원</b></span>
-                ${m.over > 0
-                    ? `<span style="color:${ok ? '#0F6E56' : '#dc2626'}; font-weight:700;">초과분 ${m.over.toLocaleString()}원 ${ok ? `방어 가능 · 여유 ${rest.toLocaleString()}원` : `방어 불가 · 부족 ${Math.abs(rest).toLocaleString()}원`}</span>`
-                    : `<span style="color:var(--text-light);">한도 초과 없음</span>`}
+            return `<div style="margin-top:6px; padding:9px 11px; background:${ok ? '#ECFDF5' : '#FEF2F2'}; border-radius:4px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
+                <span style="font-size:13px; font-weight:700; color:${ok ? '#0F6E56' : '#dc2626'};">${ok
+                    ? `✓ 인상 여력 ${rest.toLocaleString()}원`
+                    : `⚠️ 인상 여력 없음 · ${Math.abs(rest).toLocaleString()}원 부족`}</span>
+                <span style="font-size:11px; color:var(--text-light);">부대시설 ${m.margin.toLocaleString()}${m.over > 0 ? ` − 초과 ${m.over.toLocaleString()}` : ''}</span>
             </div>`;
         })()}</div>` : ''}
         
@@ -4427,6 +4427,7 @@ function renderMgrConstructions() {
                 <option value="m" ${c.unit === 'm' ? 'selected' : ''}>m</option>
                 <option value="품" ${c.unit === '품' ? 'selected' : ''}>품</option>
                 <option value="식" ${c.unit === '식' ? 'selected' : ''}>식</option>
+                <option value="개" ${c.unit === '개' ? 'selected' : ''}>개</option>
             </select>
             <span style="color:var(--text-light);">×</span>
             <input type="text" value="${c.price ? c.price.toLocaleString() : ''}" placeholder="단가" onchange="updateMgrConstPrice(${i},this)" style="width:80px; padding:6px; border:1px solid var(--border); border-radius:4px; font-size:11px;">
@@ -4775,6 +4776,7 @@ function renderConstructions() {
                     <option value="m" ${c.unit === 'm' ? 'selected' : ''}>m</option>
                     <option value="품" ${c.unit === '품' ? 'selected' : ''}>품</option>
                     <option value="식" ${c.unit === '식' ? 'selected' : ''}>식</option>
+                    <option value="개" ${c.unit === '개' ? 'selected' : ''}>개</option>
                 </select>
             </div>
             ${showCap ? (calcMaxLabor(c.type, c.consultPrice) !== null
