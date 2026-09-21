@@ -3607,9 +3607,7 @@ function renderSiteInfoTab(s, assigns) {
                 const est = Number(c.estPrice) || 0;
                 // 부대시설: 견적가가 입력된 항목은 좌측에 견적 계산식과 차이를 표시
                 if (est > 0) {
-                    const diff = (est - price) * qty;
-                    return `<span style="margin-left:6px; font-size:11px; color:#1D4ED8; font-weight:600;">${qty.toLocaleString()}${c.unit || '식'} × ${est.toLocaleString()}원 = ${(est * qty).toLocaleString()}원</span>` +
-                           `<span style="margin-left:8px; font-size:11px; color:${diff < 0 ? '#dc2626' : 'var(--text-light)'}; font-weight:600;">차이 ${diff.toLocaleString()}원</span>`;
+                    return `<span style="margin-left:6px; font-size:11px; color:#1D4ED8; font-weight:600;">${qty.toLocaleString()}${c.unit || '㎡'} × ${est.toLocaleString()}원 = ${(est * qty).toLocaleString()}원</span>`;
                 }
                 const ml = calcMaxLabor(c.type, c.consultPrice);
                 if (ml === null) return '';
