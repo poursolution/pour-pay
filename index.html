@@ -929,7 +929,8 @@ const DEFAULT_LABOR_RATE_BASE = {
     single: { consult: 27500, maxLabor: 11000 },
     metal:  { consult: 37000, maxLabor: 15000 },
     slab:   { consult: 30500, maxLabor: 11000 },
-    drain:  { consult: 32500, maxLabor: 13000 }
+    drain:  { consult: 32500, maxLabor: 13000 },
+    pvc:    { consult: 0,     maxLabor: 0 }
 };
 
 /* 기술자문(복합공종) 적용 공종 목록 */
@@ -948,6 +949,8 @@ const TECH_COMPOSITE_WORKS = [
 function calcMaxLabor(type, consultPrice) {
     const base = (data.laborRateBase || DEFAULT_LABOR_RATE_BASE)[type];
     if (!base) return null;
+    // 기준값 미입력(0/0) 공종은 기준 없는 공종(부대시설)으로 취급
+    if (!(Number(base.consult) || 0) && !(Number(base.maxLabor) || 0)) return null;
     const cp = Number(consultPrice) || 0;
     if (!cp) return base.maxLabor;                       // 컨설팅단가 미입력 → 기본 한도
     return base.maxLabor + (cp - base.consult);
@@ -960,9 +963,13 @@ function calcMarginSummary(constructions) {
         const qty = Number(c.qty) || 0;
         const price = Number(c.price) || 0;
         const est = Number(c.estPrice) || 0;
-        if (est > 0) { hasEst = true; margin += (est - price) * qty; }
         const ml = calcMaxLabor(c.type, c.consultPrice);
-        if (ml !== null && price > ml) over += (price - ml) * qty;
+        if (ml === null) {
+            // 기준단가 없는 공종(부대시설·기타) — 견적가가 없으면 노무비만큼 여력에서 차감
+            if (qty > 0 && (est > 0 || price > 0)) { hasEst = true; margin += (est - price) * qty; }
+        } else if (price > ml) {
+            over += (price - ml) * qty;
+        }
     });
     return { margin, over, hasEst };
 }
