@@ -1054,7 +1054,7 @@ function parseCurrency(str) {
     const result = parseInt(number) || 0;
     return isNegative ? -result : result;
 }
-function formatMoney(n) { return n ? Number(n).toLocaleString() + '원' : '-'; }
+function formatMoney(n) { return (n === 0 || n === null || n === undefined || n === '') ? '-' : Number(n).toLocaleString() + '원'; }
 function toast(msg) {
     const old = document.querySelector('.toast'); if (old) old.remove();
     const el = document.createElement('div'); el.className = 'toast'; el.textContent = msg;
@@ -3978,7 +3978,7 @@ function renderPaymentTab(s) {
     const totalLabor = laborSubtotal + extraLabor;
     const expenseTotal = (s.expenses || []).reduce((sum, e) => sum + (e.amount || 0), 0);
     const totalAmount = s.totalAmount || 0;
-    const consultingTotal = Math.max(0, totalAmount - totalLabor - expenseTotal);
+    const consultingTotal = totalAmount - totalLabor - expenseTotal;
     
     // 컨설팅 대금 합계
     const consultingPays = s.consultingPays || [];
@@ -4224,7 +4224,7 @@ function recalcSiteTotals(site) {
     const laborSubtotal = (site.constructions || []).reduce((sum, c) => sum + (c.cost || 0), 0);
     site.totalLabor = laborSubtotal + (site.extraLabor || 0);
     site.expenseTotal = (site.expenses || []).reduce((sum, e) => sum + (e.amount || 0), 0);
-    site.consultingTotal = Math.max(0, (site.totalAmount || 0) - site.totalLabor - site.expenseTotal);
+    site.consultingTotal = (site.totalAmount || 0) - site.totalLabor - site.expenseTotal;
 }
 
 /* 대금 항목 추가 */
@@ -5045,7 +5045,7 @@ async function saveSite() {
         constructions,
         totalLabor: laborSubtotal,
         totalAmount,
-        consultingTotal: Math.max(0, totalAmount - laborSubtotal),
+        consultingTotal: totalAmount - laborSubtotal,
         memo: '',
         unitPrices: tempUnitPrices.filter(p => p.label),
         unitPriceMemo: (document.getElementById('unitPriceMemo')||{}).value || '',
@@ -6218,7 +6218,7 @@ function downloadSitesExcel() {
         const laborSubtotal = (s.constructions || []).reduce((sum, c) => sum + (c.cost || 0), 0);
         const totalLabor = laborSubtotal + (s.extraLabor || 0);
         const expenseTotal = (s.expenses || []).reduce((sum, e) => sum + (e.amount || 0), 0);
-        const consultingCalc = Math.max(0, (s.totalAmount || 0) - totalLabor - expenseTotal);
+        const consultingCalc = (s.totalAmount || 0) - totalLabor - expenseTotal;
         
         const row = [
             s.name || '',
@@ -6363,7 +6363,7 @@ async function downloadSitePDF() {
         const laborSubtotal = (s.constructions || []).reduce((sum, c) => sum + (c.cost || 0), 0);
         const totalLabor = laborSubtotal + (s.extraLabor || 0);
         const expenseTotal = (s.expenses || []).reduce((sum, e) => sum + (e.amount || 0), 0);
-        const consultingTotal = Math.max(0, (s.totalAmount || 0) - totalLabor - expenseTotal);
+        const consultingTotal = (s.totalAmount || 0) - totalLabor - expenseTotal;
         const assigns = data.siteManagers.filter(sm => sm.siteId === s.id);
         
         // HTML 생성
