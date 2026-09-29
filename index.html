@@ -3200,8 +3200,10 @@ function renderSiteList(sites) {
         const _cType = s.siteType || 'consulting';
         const _useConsulting = _cType !== 'direct';
         const _useLabor = _cType !== 'transfer';
-        const consultingOK = !_useConsulting || (consultingTotal > 0 && consultingRemain <= 0);
-        const laborOK = !_useLabor || (laborTotal > 0 && laborRemain <= 0);
+        // (2026-09-30) 감액(마이너스 계산서)으로 총액이 0 이하가 되는 현장도 완료로 인정.
+        // 판정 기준을 '총액 > 0'에서 '회차 존재 + 미입금 없음'으로 변경.
+        const consultingOK = !_useConsulting || ((s.consultingPays || []).length > 0 && consultingRemain <= 0);
+        const laborOK = !_useLabor || ((s.laborPays || []).length > 0 && laborRemain <= 0);
         // 완료 조건: 공정률 100% AND 해당 공사형태의 대금 모두 청구·정산 완료
         const isPaymentCompleted = progress >= 100 && consultingOK && laborOK;
 
@@ -3251,8 +3253,10 @@ function filterSites() {
         const _cType = s.siteType || 'consulting';
         const _useConsulting = _cType !== 'direct';
         const _useLabor = _cType !== 'transfer';
-        const consultingOK = !_useConsulting || (consultingTotal > 0 && consultingRemain <= 0);
-        const laborOK = !_useLabor || (laborTotal > 0 && laborRemain <= 0);
+        // (2026-09-30) 감액(마이너스 계산서)으로 총액이 0 이하가 되는 현장도 완료로 인정.
+        // 판정 기준을 '총액 > 0'에서 '회차 존재 + 미입금 없음'으로 변경.
+        const consultingOK = !_useConsulting || ((s.consultingPays || []).length > 0 && consultingRemain <= 0);
+        const laborOK = !_useLabor || ((s.laborPays || []).length > 0 && laborRemain <= 0);
         // 완료 조건: 공정률 100% AND 해당 공사형태의 대금 모두 청구·정산 완료
         const isPaymentCompleted = progress >= 100 && consultingOK && laborOK;
         
