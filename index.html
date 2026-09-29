@@ -957,18 +957,46 @@ function calcMaxLabor(type, consultPrice) {
 }
 
 /* 부대시설 차이(견적가 − 노임) 합계와 공종 한도 초과분 집계 */
+/* 품·식 등으로 별도 계상된 노무비를 포함 공종에 합산해 실질 ㎡단가를 구한다.
+   반환: { [행 index]: { price, effective, extra } } — effective가 한도 비교 기준 */
+let _effRates = {};
+function calcEffectiveRates(constructions) {
+    const out = {};
+    const extraByType = {};   // 포함 공종별 추가 노무비 합계
+    (constructions || []).forEach(c => {
+        if (!c.includeIn) return;
+        const amt = (Number(c.qty) || 0) * (Number(c.price) || 0);
+        extraByType[c.includeIn] = (extraByType[c.includeIn] || 0) + amt;
+    });
+    (constructions || []).forEach((c, i) => {
+        const qty = Number(c.qty) || 0;
+        const price = Number(c.price) || 0;
+        const extra = extraByType[c.type] || 0;
+        // 포함 대상 본 공종만 실질 단가를 다시 구함 (물량이 있어야 환산 가능)
+        const effective = (extra > 0 && qty > 0 && !c.includeIn)
+            ? Math.round((price * qty + extra) / qty)
+            : price;
+        out[i] = { price, effective, extra: c.includeIn ? 0 : extra };
+    });
+    return out;
+}
+
 function calcMarginSummary(constructions) {
     let margin = 0, over = 0, hasEst = false;
-    (constructions || []).forEach(c => {
+    const eff = calcEffectiveRates(constructions);
+    (constructions || []).forEach((c, i) => {
         const qty = Number(c.qty) || 0;
         const price = Number(c.price) || 0;
         const est = Number(c.estPrice) || 0;
+        // 다른 공종에 포함되는 행(품·식 노무비)은 본 공종 실질단가에 이미 반영됨 → 여기서는 제외
+        if (c.includeIn) return;
         const ml = calcMaxLabor(c.type, c.consultPrice);
         if (ml === null) {
             // 기준단가 없는 공종(부대시설·기타) — 견적가가 없으면 노무비만큼 여력에서 차감
             if (qty > 0 && (est > 0 || price > 0)) { hasEst = true; margin += (est - price) * qty; }
-        } else if (price > ml) {
-            over += (price - ml) * qty;
+        } else {
+            const rate = (eff[i] && eff[i].effective) || price;
+            if (rate > ml) over += (rate - ml) * qty;
         }
     });
     return { margin, over, hasEst };
@@ -3606,20 +3634,25 @@ function renderSiteInfoTab(s, assigns) {
             <div class="status-row">${statusHtml}</div>
         </div>` : ''}
         
-        ${s.constructions?.length ? `<div class="card"><div class="card-header"><div class="card-title">🔧 ${siteType === 'transfer' ? '공종' : '공종별 물량'}</div></div>${s.constructions.map(c => siteType === 'transfer' ?
+        ${s.constructions?.length ? `<div class="card"><div class="card-header"><div class="card-title">🔧 ${siteType === 'transfer' ? '공종' : '공종별 물량'}</div></div>${(() => { const r = calcEffectiveRates(s.constructions); _effRates = {}; s.constructions.forEach((c, i) => { _effRates[c.id] = r[i]; }); return ''; })()}${s.constructions.map(c => siteType === 'transfer' ?
             `<div style="display:flex; padding:6px; background:#f8fafc; border-radius:4px; margin-bottom:3px; font-size:11px;"><span>${c.name || CONST_TYPES[c.type]}</span></div>` :
             `<div style="display:flex; justify-content:space-between; gap:10px; flex-wrap:wrap; padding:6px; background:#f8fafc; border-radius:4px; margin-bottom:3px; font-size:11px;"><span>${c.name || CONST_TYPES[c.type]}${(() => {
                 if (!canSeeLaborCap()) return '';
                 const qty = Number(c.qty) || 0, price = Number(c.price) || 0;
                 const est = Number(c.estPrice) || 0;
-                // 부대시설: 견적가가 입력된 항목은 좌측에 견적 계산식과 차이를 표시
+                // 다른 공종에 합산되는 행
+                if (c.includeIn) {
+                    return `<span style="margin-left:6px; font-size:11px; color:#5B21B6; font-weight:600;">→ ${CONST_TYPES[c.includeIn] || c.includeIn}에 포함</span>`;
+                }
+                // 부대시설: 견적가가 입력된 항목은 좌측에 견적 계산식을 표시
                 if (est > 0) {
                     return `<span style="margin-left:6px; font-size:11px; color:#1D4ED8; font-weight:600;">${qty.toLocaleString()}${c.unit || '㎡'} × ${est.toLocaleString()}원 = ${(est * qty).toLocaleString()}원</span>`;
                 }
                 const ml = calcMaxLabor(c.type, c.consultPrice);
                 if (ml === null) return '';
-                const over = price > ml;
-                return `<span style="margin-left:6px; font-size:11px; color:#dc2626; font-weight:${over ? '800' : '700'};">최대 ${ml.toLocaleString()}${over ? ' ⚠️초과' : ''}</span>`;
+                const e = _effRates[c.id] || { effective: price, extra: 0 };
+                const over = e.effective > ml;
+                return `<span style="margin-left:6px; font-size:11px; color:#dc2626; font-weight:${over ? '800' : '700'};">최대 ${ml.toLocaleString()}${e.extra > 0 ? ` · 실질 ${e.effective.toLocaleString()}` : ''}${over ? ' ⚠️초과' : ''}</span>`;
             })()}</span><span>${(c.qty || 0).toLocaleString()}${c.unit || '㎡'} × ${(c.price || 0).toLocaleString()}원 = <b>${(c.cost || 0).toLocaleString()}원</b></span></div>`
         ).join('')}${(() => {
             if (!canSeeLaborCap() || siteType === 'transfer') return '';
@@ -3630,8 +3663,8 @@ function renderSiteInfoTab(s, assigns) {
             return `<div style="margin-top:6px; padding:9px 11px; background:${ok ? '#ECFDF5' : '#FEF2F2'}; border-radius:4px; display:flex; justify-content:space-between; align-items:center; gap:10px; flex-wrap:wrap;">
                 <span style="font-size:13px; font-weight:700; color:${ok ? '#0F6E56' : '#dc2626'};">${ok
                     ? `✓ 인상 여력 ${rest.toLocaleString()}원`
-                    : `⚠️ 인상 여력 없음 · ${Math.abs(rest).toLocaleString()}원 부족`}</span>
-                <span style="font-size:11px; color:var(--text-light);">부대시설 ${m.margin.toLocaleString()}${m.over > 0 ? ` − 초과 ${m.over.toLocaleString()}` : ''}</span>
+                    : `⚠️ 한도 초과 ${Math.abs(rest).toLocaleString()}원`}</span>
+                ${ok ? `<span style="font-size:11px; color:var(--text-light);">부대시설 ${m.margin.toLocaleString()}${m.over > 0 ? ` − 초과 ${m.over.toLocaleString()}` : ''}</span>` : ''}
             </div>`;
         })()}</div>` : ''}
         
@@ -4759,12 +4792,20 @@ function addConstruction(type) {
 
 function renderConstructions() {
     const showCap = canSeeLaborCap();
+    const effRates = calcEffectiveRates(tempConstructions);
+    // 포함 공종 선택지: 기준단가가 설정된 공종 중 실제 등록된 것
+    const includeOpts = tempConstructions
+        .filter(x => !x.includeIn && calcMaxLabor(x.type, x.consultPrice) !== null)
+        .map(x => x.type)
+        .filter((v, idx, arr) => arr.indexOf(v) === idx);
     document.getElementById('constructionList').innerHTML = tempConstructions.map((c, i) => {
-        const maxLabor = showCap ? calcMaxLabor(c.type, c.consultPrice) : null;
-        const over = maxLabor !== null && (Number(c.price) || 0) > maxLabor;
+        const maxLabor = (showCap && !c.includeIn) ? calcMaxLabor(c.type, c.consultPrice) : null;
+        const effRate = (effRates[i] && effRates[i].effective) || (Number(c.price) || 0);
+        const hasExtra = !!(effRates[i] && effRates[i].extra > 0);
+        const over = maxLabor !== null && effRate > maxLabor;
         let capHtml = '';
         if (maxLabor !== null) {
-            capHtml = `<div style="font-size:11px; margin-top:2px; color:#dc2626; font-weight:${over ? '800' : '700'};">최대 ${maxLabor.toLocaleString()}${over ? ' ⚠️초과' : ''}</div>`;
+            capHtml = `<div style="font-size:11px; margin-top:2px; color:#dc2626; font-weight:${over ? '800' : '700'};">최대 ${maxLabor.toLocaleString()}${hasExtra ? ` · 실질 ${effRate.toLocaleString()}` : ''}${over ? ' ⚠️초과' : ''}</div>`;
         } else if (showCap && Number(c.estPrice) > 0) {
             const diff = (Number(c.estPrice) - (Number(c.price) || 0)) * (Number(c.qty) || 0);
             capHtml = `<div style="font-size:11px; margin-top:2px; color:${diff < 0 ? '#dc2626' : '#1D4ED8'}; font-weight:700;">차이 ${diff.toLocaleString()}</div>`;
@@ -4784,9 +4825,20 @@ function renderConstructions() {
                     <option value="개" ${c.unit === '개' ? 'selected' : ''}>개</option>
                 </select>
             </div>
-            ${showCap ? (calcMaxLabor(c.type, c.consultPrice) !== null
-                ? `<input type="text" value="${c.consultPrice ? Number(c.consultPrice).toLocaleString() : ''}" placeholder="컨설팅단가" title="이 현장에 책정된 컨설팅 단가 (컨설팅내역서 최종본)" onchange="updateConstructionConsultPrice(${i},this)" onblur="updateConstructionConsultPrice(${i},this)" style="background:#fffbeb;">`
-                : `<input type="text" value="${c.estPrice ? Number(c.estPrice).toLocaleString() : ''}" placeholder="견적가" title="부대시설 1개소(식)당 우리 견적가 — 노임과의 차이가 마진이 됩니다" onchange="updateConstructionEstPrice(${i},this)" onblur="updateConstructionEstPrice(${i},this)" style="background:#EFF6FF;">`) : ''}
+            ${showCap ? (c.includeIn
+                ? `<select onchange="updateConstructionIncludeIn(${i}, this.value)" title="이 노무비를 어느 공종에 합산할지" style="padding:6px 2px; border:1px solid var(--border); border-radius:2px; font-size:11px; background:#F5F3FF;">
+                       <option value="">포함 안 함</option>
+                       ${includeOpts.map(t => `<option value="${t}" ${c.includeIn === t ? 'selected' : ''}>${CONST_TYPES[t]}에 포함</option>`).join('')}
+                   </select>`
+                : (calcMaxLabor(c.type, c.consultPrice) !== null
+                    ? `<input type="text" value="${c.consultPrice ? Number(c.consultPrice).toLocaleString() : ''}" placeholder="컨설팅단가" title="이 현장에 책정된 컨설팅 단가 (컨설팅내역서 최종본)" onchange="updateConstructionConsultPrice(${i},this)" onblur="updateConstructionConsultPrice(${i},this)" style="background:#fffbeb;">`
+                    : `<div style="display:flex; gap:3px;">
+                        <input type="text" value="${c.estPrice ? Number(c.estPrice).toLocaleString() : ''}" placeholder="견적가" title="부대시설 1개소(식)당 우리 견적가 — 노임과의 차이가 마진이 됩니다" onchange="updateConstructionEstPrice(${i},this)" onblur="updateConstructionEstPrice(${i},this)" style="background:#EFF6FF; min-width:0; flex:1;">
+                        ${includeOpts.length ? `<select onchange="updateConstructionIncludeIn(${i}, this.value)" title="이 노무비를 어느 공종에 합산할지" style="padding:6px 1px; border:1px solid var(--border); border-radius:2px; font-size:10px; width:52px;">
+                            <option value="">별도</option>
+                            ${includeOpts.map(t => `<option value="${t}">${CONST_TYPES[t]}</option>`).join('')}
+                        </select>` : ''}
+                       </div>`)) : ''}
             <div>
                 <input type="text" value="${c.price ? c.price.toLocaleString() : ''}" placeholder="노무비단가" onchange="updateConstructionPrice(${i},this)" onblur="updateConstructionPrice(${i},this)" style="${over ? 'border-color:#dc2626;' : ''}">
                 ${capHtml}
@@ -4802,6 +4854,15 @@ function updateConstructionConsultPrice(idx, el) {
     const c = tempConstructions[idx];
     if (!c) return;
     c.consultPrice = parseInt(String(el.value).replace(/[^\d]/g, '')) || 0;
+    renderConstructions();
+}
+
+/* 품·식으로 계상된 노무비를 어느 공종에 합산할지 지정 */
+function updateConstructionIncludeIn(idx, value) {
+    const c = tempConstructions[idx];
+    if (!c) return;
+    if (value) { c.includeIn = value; delete c.estPrice; }
+    else { delete c.includeIn; }
     renderConstructions();
 }
 
