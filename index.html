@@ -593,6 +593,7 @@
             <div class="section-title">📋 사업자 정보 (세금계산서 발행용)</div>
             <div style="background:#fffbeb; border:1px solid #fde68a; border-radius:2px; padding:12px; margin-bottom:10px;">
                 <div style="font-size:11px; color:#92400e; margin-bottom:8px;">💡 세금계산서 발행 시 공급받는자 정보로 사용됩니다</div>
+                <div class="form-group"><label>상호명 (사업자등록증상)</label><textarea id="contractorBizName" rows="1" placeholder="미입력 시 위 시공사명을 사용합니다" style="resize:vertical; font-family:inherit; line-height:1.5; overflow:hidden;" oninput="autoGrow(this)"></textarea></div>
                 <div class="grid-2">
                     <div class="form-group"><label>사업자등록번호</label><input type="text" id="contractorBizNo" placeholder="000-00-00000"></div>
                     <div class="form-group"><label>대표자명</label><input type="text" id="contractorCeoName" placeholder="홍길동"></div>
@@ -601,7 +602,7 @@
                     <div class="form-group"><label>업태</label><input type="text" id="contractorBizType" placeholder="건설업"></div>
                     <div class="form-group"><label>종목</label><input type="text" id="contractorBizItem" placeholder="방수공사"></div>
                 </div>
-                <div class="form-group"><label>사업장 주소</label><input type="text" id="contractorBizAddress" placeholder="서울특별시 강남구..."></div>
+                <div class="form-group"><label>사업장 주소</label><textarea id="contractorBizAddress" rows="1" placeholder="서울특별시 강남구..." style="resize:vertical; font-family:inherit; line-height:1.5; overflow:hidden;" oninput="autoGrow(this)"></textarea></div>
                 <div class="form-group"><label>세금계산서 수신 이메일</label><input type="text" id="contractorBizEmail" placeholder="tax@company.co.kr"></div>
             </div>
             <div class="form-group"><label>메모</label><textarea id="contractorMemo" rows="2"></textarea></div>
@@ -5289,6 +5290,7 @@ function openContractorModal(id = null) {
         document.getElementById('contractorContactPhone').value = c?.contactPhone || '';
         document.getElementById('contractorTaxDay').value = c?.taxDay || '';
         document.getElementById('contractorLaborDay').value = c?.laborDay || '';
+        document.getElementById('contractorBizName').value = c?.bizName || '';
         document.getElementById('contractorBizNo').value = c?.bizNo || '';
         document.getElementById('contractorCeoName').value = c?.ceoName || '';
         document.getElementById('contractorBizType').value = c?.bizType || '';
@@ -5296,8 +5298,17 @@ function openContractorModal(id = null) {
         document.getElementById('contractorBizAddress').value = c?.bizAddress || '';
         document.getElementById('contractorBizEmail').value = c?.bizEmail || '';
         document.getElementById('contractorMemo').value = c?.memo || '';
-    } else ['contractorName', 'contractorContactName', 'contractorContactPhone', 'contractorTaxDay', 'contractorLaborDay', 'contractorBizNo', 'contractorCeoName', 'contractorBizType', 'contractorBizItem', 'contractorBizAddress', 'contractorBizEmail', 'contractorMemo'].forEach(x => document.getElementById(x).value = '');
+    } else ['contractorName', 'contractorContactName', 'contractorContactPhone', 'contractorTaxDay', 'contractorLaborDay', 'contractorBizName', 'contractorBizNo', 'contractorCeoName', 'contractorBizType', 'contractorBizItem', 'contractorBizAddress', 'contractorBizEmail', 'contractorMemo'].forEach(x => document.getElementById(x).value = '');
     document.getElementById('contractorModal').classList.add('active');
+    // 여러 줄 입력칸은 내용 길이에 맞춰 펼쳐 보여줌
+    ['contractorBizName', 'contractorBizAddress'].forEach(x => autoGrow(document.getElementById(x)));
+}
+
+/* 내용 길이에 맞춰 textarea 높이를 늘림 (긴 주소·상호가 잘리지 않도록) */
+function autoGrow(el) {
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = (el.scrollHeight + 2) + 'px';
 }
 
 function closeContractorModal() { document.getElementById('contractorModal').classList.remove('active'); editingId = null; }
@@ -5312,6 +5323,7 @@ async function saveContractor() {
         contactPhone: document.getElementById('contractorContactPhone').value,
         taxDay: document.getElementById('contractorTaxDay').value, 
         laborDay: document.getElementById('contractorLaborDay').value,
+        bizName: document.getElementById('contractorBizName').value.trim(),
         bizNo: document.getElementById('contractorBizNo').value,
         ceoName: document.getElementById('contractorCeoName').value,
         bizType: document.getElementById('contractorBizType').value,
