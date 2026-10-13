@@ -462,6 +462,7 @@
                 <button class="tab" onclick="showTab('managers')">👷 소장님</button>
                 <button class="tab" onclick="showTab('bulk')">📋 일괄등록</button>
                 <button class="tab" onclick="showTab('exports')">📥 다운로드</button>
+                <button class="tab hidden" id="loansTabBtn" onclick="showTab('loans')">💵 차용</button>
             </div>
             
             <div id="dashboardTab"><div id="dashboardContent"></div></div>
@@ -471,6 +472,7 @@
             <div id="managersTab" class="hidden"><div id="managersContent"></div></div>
             <div id="bulkTab" class="hidden"><div id="bulkContent"></div></div>
             <div id="exportsTab" class="hidden"><div id="exportsContent"></div></div>
+            <div id="loansTab" class="hidden"><div id="loansContent"></div></div>
         </div>
         
         <div id="managerView" class="hidden"><div id="mgrViewContent"></div></div>
@@ -8530,5 +8532,910 @@ console.log('v8.6 시작 - 노임관리 월별 독립 수정 (yearMonth per work
 // 월별 독립 마이그레이션: yearMonth 없는 기존 작업자 레코드 정리
 // (레거시 데이터는 화면에 표시되지 않도록 처리 — yearMonth 필터에서 자동 제외됨)
 </script>
+<!-- ═══════════════════════════════════════════════════════════════
+     [추가 2026-10-13] 현장운영자금 대여(차용) 관리 탭
+     - 기존 코드·데이터(siteData)는 수정하지 않음. 별도 경로 loanData에만 저장
+     - 기존 소장·현장·시공사 목록은 자동완성용으로 읽기만 함
+     - 기준: 「현장 운영자금 대여제도 도입방안」 수정 17차 (2026.10.06)
+     ═══════════════════════════════════════════════════════════════ -->
+<style>
+#loansTab .ln-head { display:flex; justify-content:space-between; align-items:flex-end; gap:8px; flex-wrap:wrap; margin-bottom:10px; }
+#loansTab .ln-head h2 { font-size:16px; font-weight:700; }
+#loansTab .ln-head p { font-size:11px; color:var(--text-light); margin-top:2px; }
+#loansTab .ln-sub { display:flex; gap:4px; flex-wrap:wrap; margin-bottom:12px; }
+#loansTab .ln-sub button { padding:7px 12px; font-size:12px; border:1px solid var(--border); background:#fff; border-radius:2px; cursor:pointer; font-family:inherit; color:var(--text-light); }
+#loansTab .ln-sub button.on { background:var(--primary); color:#fff; border-color:var(--primary); font-weight:600; }
+#loansTab .ln-kpis { display:grid; grid-template-columns:repeat(6, 1fr); gap:8px; margin-bottom:12px; }
+#loansTab .ln-kpi { background:#fff; border:1px solid var(--border); border-radius:2px; padding:10px 12px; }
+#loansTab .ln-kpi .k { font-size:11px; color:var(--text-light); }
+#loansTab .ln-kpi .v { font-size:17px; font-weight:700; margin-top:2px; font-variant-numeric:tabular-nums; }
+#loansTab .ln-kpi .s { font-size:11px; color:var(--text-light); margin-top:1px; }
+#loansTab .ln-kpi.warn .v { color:#b45309; } #loansTab .ln-kpi.bad .v { color:var(--danger); }
+#loansTab .ln-grid2 { display:grid; grid-template-columns:1fr 1fr; gap:12px; }
+#loansTab .ln-bar { margin:8px 0 12px; }
+#loansTab .ln-bar .t { display:flex; justify-content:space-between; font-size:12px; margin-bottom:4px; }
+#loansTab .ln-bar .t b { font-variant-numeric:tabular-nums; }
+#loansTab .ln-bar .track { height:8px; background:#efece8; border-radius:2px; overflow:hidden; }
+#loansTab .ln-bar .fill { height:100%; background:var(--primary); }
+#loansTab .ln-bar .fill.warn { background:var(--warning); } #loansTab .ln-bar .fill.bad { background:var(--danger); }
+#loansTab .ln-note, #loanModal .ln-note { font-size:11px; color:var(--text-light); line-height:1.6; }
+#loansTab .ln-tablewrap { overflow-x:auto; }
+#loansTab table.ln-t { width:100%; border-collapse:collapse; font-size:12px; }
+#loansTab table.ln-t th { background:#f5f3f0; font-weight:600; font-size:11px; color:#555; text-align:left; padding:7px 8px; border-bottom:1px solid var(--border); white-space:nowrap; }
+#loansTab table.ln-t td { padding:7px 8px; border-bottom:1px solid #f0ede9; vertical-align:middle; }
+#loansTab table.ln-t td.n, #loansTab table.ln-t th.n { text-align:right; font-variant-numeric:tabular-nums; white-space:nowrap; }
+#loansTab table.ln-t tr.click { cursor:pointer; } #loansTab table.ln-t tr.click:hover td { background:#faf9f7; }
+#loansTab table.ln-t tfoot td { font-weight:700; background:#faf9f7; }
+#loansTab .ln-filters { display:flex; gap:6px; flex-wrap:wrap; align-items:center; margin-bottom:10px; }
+#loansTab .ln-filters input, #loansTab .ln-filters select { padding:7px 9px; border:1px solid var(--border); border-radius:2px; font-size:12px; font-family:inherit; }
+#loansTab .ln-todo { display:flex; justify-content:space-between; align-items:center; gap:8px; padding:9px 10px; border:1px solid var(--border); border-left:3px solid var(--accent); border-radius:2px; margin-bottom:6px; background:#fff; flex-wrap:wrap; }
+#loansTab .ln-todo.late { border-left-color:var(--danger); }
+#loansTab .ln-todo .who { font-weight:600; font-size:13px; }
+#loansTab .ln-todo .what { font-size:12px; color:var(--text-light); margin-top:2px; }
+#loansTab .ln-rule, #loanModal .ln-rule { width:100%; border-collapse:collapse; font-size:12px; }
+#loansTab .ln-rule th, #loanModal .ln-rule th { width:130px; text-align:left; vertical-align:top; padding:8px; background:#f5f3f0; border-bottom:1px solid #fff; font-weight:600; }
+#loansTab .ln-rule td, #loanModal .ln-rule td { padding:8px; border-bottom:1px solid #f0ede9; line-height:1.6; }
+#loansTab .ln-empty { text-align:center; padding:28px 12px; color:var(--text-light); font-size:13px; line-height:1.7; }
+#loansTab .ln-alert, #loanModal .ln-alert { padding:10px 12px; border-radius:2px; font-size:12px; margin-bottom:10px; background:#fef3c7; color:#92400e; border:1px solid #fde68a; }
+#loansTab .ln-alert.bad, #loanModal .ln-alert.bad { background:#fee2e2; color:#991b1b; border-color:#fecaca; }
+.ln-checks { border:1px solid var(--border); border-radius:2px; padding:8px 10px; background:#faf9f7; margin:6px 0 10px; }
+.ln-checks div { font-size:12px; padding:3px 0; display:flex; gap:6px; }
+.ln-checks .ok { color:#059669; } .ln-checks .no { color:var(--danger); } .ln-checks .wa { color:#b45309; }
+.ln-hist { font-size:12px; border-top:1px solid var(--border); margin-top:6px; }
+.ln-hist div { padding:5px 0; border-bottom:1px dashed #eee; }
+.ln-msg { width:100%; min-height:120px; font-size:12px; padding:8px; border:1px solid var(--border); border-radius:2px; font-family:inherit; line-height:1.6; }
+@media (max-width: 760px) {
+  #loansTab .ln-kpis { grid-template-columns:repeat(2, 1fr); }
+  #loansTab .ln-grid2 { grid-template-columns:1fr; }
+  #loanModal .grid-2, #loanModal .grid-3 { grid-template-columns:1fr; }
+}
+</style>
+
+<!-- 대여 등록/수정 · 상세 · 상환 · 연장 · 알림 모달 (내용은 스크립트가 채움) -->
+<div id="loanModal" class="modal">
+  <div class="modal-content" style="max-width:760px;">
+    <div class="modal-header"><h3 id="loanModalTitle">대여</h3><button class="close-btn" onclick="LN.closeModal()">×</button></div>
+    <div class="modal-body" id="loanModalBody"></div>
+    <div class="modal-footer" id="loanModalFooter"></div>
+  </div>
+</div>
+<datalist id="lnBorrowerList"></datalist>
+<datalist id="lnSiteList"></datalist>
+<datalist id="lnContractorList"></datalist>
+
+<script>
+/* ───────── 현장운영자금 대여 관리 (LN) ───────── */
+var LN = (function () {
+  'use strict';
+  var PATH = 'loanData';
+  var ROLES = ['admin'];                 // 탭을 볼 수 있는 로그인 유형
+  var DEFAULTS = {
+    startDate: '2026-11-01',             // 제도 시행일 (이전 집행 = 기존 건)
+    perSiteLimit: 20000000,              // 현장당 한도
+    annualBudget: 200000000,             // 연간 총 집행액
+    quarterBudget: 50000000,             // 분기 집행액
+    concurrentCap: 80000000,             // 동시 미상환 잔액 상한 (신규 건)
+    termDays: 90,                        // 대여기간
+    overdueDays: 7,                      // 상환일 경과 후 연체 확정일수
+    extendNoticeDays: 3,                 // 연장 신청 기한 (상환일 n일 전)
+    repayAccount: '기업은행 468-084895-04-017 (예금주 주식회사 넷폼)'
+  };
+  var st = { loans: {}, queue: {}, settings: Object.assign({}, DEFAULTS), loaded: false, listening: false,
+             view: 'summary', year: String(new Date().getFullYear()), filter: 'active', q: '', mask: false, error: '' };
+  try { st.mask = localStorage.getItem('ln_mask') === '1'; } catch (e) {}
+
+  /* ── 유틸 ── */
+  function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
+  function won(n) { n = Number(n) || 0; return n.toLocaleString() + '원'; }
+  function man(n) { n = Number(n) || 0; if (!n) return '0'; var m = n / 10000; return (m % 1 ? m.toFixed(1) : m.toLocaleString()) + '만'; }
+  function num(v) { var s = String(v == null ? '' : v).replace(/[^\d-]/g, ''); return parseInt(s, 10) || 0; }
+  function pct(a, b) { return b ? (a / b * 100).toFixed(1) + '%' : '-'; }
+  function pad(n) { return n < 10 ? '0' + n : '' + n; }
+  function today() { var d = new Date(); return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+  function toD(s) { var p = String(s).split('-'); return Date.UTC(+p[0], +p[1] - 1, +p[2]); }
+  function addDays(s, n) { if (!s) return ''; var d = new Date(toD(s) + n * 864e5); return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()); }
+  function diff(a, b) { return Math.round((toD(b) - toD(a)) / 864e5); } // b - a (일)
+  function validDate(s) { return /^\d{4}-\d{2}-\d{2}$/.test(String(s || '')); }
+  function fmtD(s) { return s ? String(s).replace(/-/g, '.') : '-'; }
+  function quarterOf(s) { return s.slice(0, 4) + '-Q' + (Math.floor((+s.slice(5, 7) - 1) / 3) + 1); }
+  function arr(v) { if (!v) return []; if (Array.isArray(v)) return v.filter(Boolean); return Object.keys(v).sort().map(function (k) { return v[k]; }).filter(Boolean); }
+  function uid(p) { return p + Date.now().toString(36) + Math.random().toString(36).slice(2, 6); }
+  function msg(t) { if (typeof toast === 'function') toast(t); else alert(t); }
+  function allowed() { return typeof currentUser !== 'undefined' && currentUser && ROLES.indexOf(currentUser.role) >= 0; }
+  function S() { return st.settings; }
+  function who() { try { return (currentUser && (currentUser.id || currentUser.name)) || ''; } catch (e) { return ''; } }
+
+  /* ── 계산 ── */
+  function list() { return Object.keys(st.loans).map(function (k) { return norm(st.loans[k]); }); }
+  function norm(l) {
+    l = Object.assign({}, l);
+    l.amount = Number(l.amount) || 0;
+    l.repayments = arr(l.repayments); l.extensions = arr(l.extensions); l.alarms = arr(l.alarms);
+    l.repaid = l.repayments.reduce(function (s, r) { return s + (Number(r.amount) || 0); }, 0);
+    l.balance = Math.max(0, l.amount - l.repaid);
+    l.origDue = l.origDueDate || l.dueDate || '';
+    l.legacy = !!l.loanDate && l.loanDate < S().startDate;
+    var t = today();
+    if (l.balance <= 0) { l.status = '상환완료'; l.cls = 'success'; }
+    else if (l.dueDate && t > l.dueDate) {
+      l.lateDays = diff(l.dueDate, t);
+      if (l.lateDays >= S().overdueDays) { l.status = '연체'; l.cls = 'danger'; } else { l.status = '미입금'; l.cls = 'danger'; }
+    } else if (l.extensions.length) { l.status = '연장'; l.cls = 'warning'; }
+    else { l.status = '진행'; l.cls = 'primary'; }
+    l.dday = l.dueDate && l.balance > 0 ? diff(t, l.dueDate) : null;
+    return l;
+  }
+  function isLate(l) { return l.status === '연체' || l.status === '미입금'; }
+  function nameMap() {
+    var order = list().sort(function (a, b) { return (a.loanDate || '').localeCompare(b.loanDate || ''); }), m = {}, i = 0;
+    order.forEach(function (l) { if (l.borrower && !(l.borrower in m)) { m[l.borrower] = code(i++); } });
+    return m;
+  }
+  function code(i) { var s = ''; i++; while (i > 0) { var r = (i - 1) % 26; s = String.fromCharCode(65 + r) + s; i = Math.floor((i - 1) / 26); } return s; }
+  var _nm = {};
+  function nm(name) { if (!st.mask) return esc(name || '-'); return esc((_nm[name] || '?') + ' 소장'); }
+  function inYear(l) { return st.year === 'all' || (l.loanDate || '').slice(0, 4) === st.year; }
+
+  function metrics(loans) {
+    var t = today(), m = { total: 0, count: loans.length, people: {}, repaid: 0, balance: 0, extCnt: 0, extAmt: 0, late: 0, lateAmt: 0,
+      dueAmt: 0, dueCnt: 0, dueRepaidAmt: 0, dueOkCnt: 0, byPerson: {} };
+    loans.forEach(function (l) {
+      m.total += l.amount; m.repaid += l.repaid; m.balance += l.balance; m.people[l.borrower] = 1;
+      if (l.extensions.length) { m.extCnt++; m.extAmt += l.amount; }
+      if (isLate(l)) { m.late++; m.lateAmt += l.balance; }
+      if ((l.origDue && l.origDue <= t) || l.balance <= 0) { m.dueCnt++; m.dueAmt += l.amount; m.dueRepaidAmt += l.repaid; if (l.balance <= 0) m.dueOkCnt++; }
+      var p = m.byPerson[l.borrower] || (m.byPerson[l.borrower] = { amt: 0, cnt: 0 }); p.amt += l.amount; p.cnt++;
+    });
+    m.peopleCnt = Object.keys(m.people).length;
+    m.maxPerson = null;
+    Object.keys(m.byPerson).forEach(function (k) { if (!m.maxPerson || m.byPerson[k].amt > m.maxPerson.amt) m.maxPerson = { name: k, amt: m.byPerson[k].amt, cnt: m.byPerson[k].cnt }; });
+    return m;
+  }
+  function budget(excludeId) {
+    var t = today(), y = t.slice(0, 4), q = quarterOf(t), b = { year: 0, quarter: 0, concurrent: 0, legacyBal: 0 };
+    list().forEach(function (l) {
+      if (l.id === excludeId) return;
+      if (l.legacy) { b.legacyBal += l.balance; return; }
+      if ((l.loanDate || '').slice(0, 4) === y) b.year += l.amount;
+      if (l.loanDate && quarterOf(l.loanDate) === q) b.quarter += l.amount;
+      b.concurrent += l.balance;
+    });
+    return b;
+  }
+
+  /* ── 알림 일정 (Ⅳ.3 사전알람) ── */
+  var ALARMS = {
+    D0:   { label: '집행 당일 안내', desc: '상환일자·상환금액·상환 계좌 안내' },
+    D30:  { label: '상환 30일 전 · 기성 수령일 확인', desc: '상환 재원 현장의 기성 수령 예정일 확인 요청' },
+    D10:  { label: '상환 10일 전 안내', desc: '상환 예정일·상환금액 안내' },
+    GIS:  { label: '기성금 수령 확인 · 즉시 상환 안내', desc: '기성 수령 확인 시 상환일 전이라도 상환 안내' },
+    DUE:  { label: '상환일 미입금 독촉', desc: '독촉 및 기한이익 상실 예고 (본부 동시 통보)' },
+    LATE: { label: '연체 확정 · 기한이익 상실 통지', desc: '상환일 7일 경과 — 기한이익 상실 통지 → 내용증명 → 지급명령' }
+  };
+  function alarmDone(l, type) {
+    return l.alarms.some(function (a) { return a.type === type && (type === 'D0' || type === 'GIS' || a.due === l.dueDate); });
+  }
+  function schedule(l) {
+    if (l.balance <= 0 || !validDate(l.dueDate)) return [];
+    var s = [];
+    if (!l.legacy && validDate(l.loanDate)) s.push({ type: 'D0', date: l.loanDate });
+    s.push({ type: 'D30', date: addDays(l.dueDate, -30) });
+    s.push({ type: 'D10', date: addDays(l.dueDate, -10) });
+    s.push({ type: 'DUE', date: l.dueDate });
+    s.push({ type: 'LATE', date: addDays(l.dueDate, S().overdueDays) });
+    return s.map(function (x) { x.done = alarmDone(l, x.type); return x; });
+  }
+  function todos() {
+    var t = today(), out = [], soon = [];
+    list().forEach(function (l) {
+      var sch = schedule(l), past = null, next = null;
+      sch.forEach(function (a) {
+        if (a.date <= t) { if (!past || a.date >= past.date) past = a; }   // 지난 단계 중 가장 최근 1개만
+        else if (!next && !a.done) next = a;
+      });
+      if (past && !past.done) out.push({ l: l, a: past });
+      if (next && diff(t, next.date) <= 14) soon.push({ l: l, a: next });
+    });
+    var sorter = function (x, y) { return x.a.date.localeCompare(y.a.date); };
+    out.sort(sorter); soon.sort(sorter);
+    return { due: out, soon: soon };
+  }
+  function template(l, type) {
+    var co = '주식회사 넷폼', amt = won(l.balance), due = fmtD(l.dueDate), acc = S().repayAccount;
+    var head = '[' + co + '] ' + (l.borrower || '') + ' 소장님, 안녕하세요.\n';
+    switch (type) {
+      case 'D0': return head + '현장 운영자금 ' + won(l.amount) + '이 오늘 집행되었습니다.\n\n· 상환일자: ' + due + '\n· 상환금액: ' + won(l.amount) + '\n· 상환계좌: ' + acc + '\n\n상환일자 전이라도 기성금 수령 시 상환하실 수 있습니다. 감사합니다.';
+      case 'D30': return head + '대여금 상환일자(' + due + ')가 30일 남았습니다.\n상환 재원 현장(' + (l.sourceSite || '') + ')의 기성금 수령 예정일을 알려주시면 감사하겠습니다.\n\n· 상환금액: ' + amt;
+      case 'D10': return head + '대여금 상환일자가 10일 남아 안내드립니다.\n\n· 상환일자: ' + due + '\n· 상환금액: ' + amt + '\n· 상환계좌: ' + acc + '\n\n감사합니다.';
+      case 'GIS': return head + '상환 재원 현장(' + (l.sourceSite || '') + ')의 기성금 수령이 확인되어 안내드립니다.\n대여금 ' + amt + '을 아래 계좌로 상환 부탁드립니다.\n\n· 상환계좌: ' + acc + '\n· 상환일자: ' + due;
+      case 'DUE': return head + '오늘(' + due + ')은 대여금 상환일자이나 입금이 확인되지 않았습니다.\n\n· 미상환금액: ' + amt + '\n· 상환계좌: ' + acc + '\n\n상환일자로부터 ' + S().overdueDays + '일이 지나면 연체로 확정되어 차용증서 제4조에 따라 기한의 이익이 상실될 수 있습니다. 빠른 상환 부탁드립니다.';
+      case 'LATE': return head + '대여금 ' + amt + '이 상환일자(' + due + ')로부터 ' + S().overdueDays + '일 이상 미상환되어 연체로 확정되었습니다.\n차용증서 제4조에 따라 기한의 이익 상실을 통지드리며, 잔액 전액의 즉시 상환을 요청드립니다.\n\n· 상환계좌: ' + acc;
+    }
+    return '';
+  }
+
+  /* ── 저장 (loanData 경로만 사용) ── */
+  function ref(p) { return db.ref(PATH + (p ? '/' + p : '')); }
+  function clean(o) { return JSON.parse(JSON.stringify(o, function (k, v) { return v === undefined ? null : v; })); }
+  function saveLoan(l) {
+    var keep = ['id', 'borrower', 'useSite', 'sourceSite', 'contractor', 'amount', 'loanDate', 'gisungDate', 'dueDate', 'origDueDate',
+      'sourceRemain', 'purpose', 'reportDate', 'approval', 'contract', 'memo', 'repayments', 'extensions', 'alarms', 'createdAt', 'createdBy', 'importedFrom'];
+    var o = {}; keep.forEach(function (k) { if (l[k] !== undefined) o[k] = l[k]; });
+    o.updatedAt = new Date().toISOString(); o.updatedBy = who();
+    st.loans[o.id] = o; render();
+    return ref('loans/' + o.id).set(clean(o)).then(function () { return true; }).catch(fail);
+  }
+  function fail(e) {
+    console.error('loanData 저장 실패', e);
+    var t = String(e && (e.code || e.message) || e);
+    st.error = /permission|PERMISSION/i.test(t)
+      ? 'Firebase 저장 권한이 없습니다. 담당 개발자에게 "Realtime Database 규칙에 loanData 경로 읽기/쓰기 허용"을 요청해 주세요.'
+      : '저장 실패: ' + t;
+    msg('⚠️ ' + st.error); render(); return false;
+  }
+  function listen() {
+    if (st.listening || typeof db === 'undefined') return;
+    st.listening = true;
+    ref().on('value', function (snap) {
+      var v = snap.val() || {};
+      st.loans = v.loans || {}; st.queue = v.queue || {};
+      st.settings = Object.assign({}, DEFAULTS, v.settings || {});
+      st.loaded = true; st.error = ''; render();
+    }, function (e) { st.listening = false; st.loaded = true; fail(e); });
+  }
+
+  /* ── 탭 연결 (기존 showTab은 그대로 두고 감싸기만 함) ── */
+  function install() {
+    if (typeof showTab !== 'function' || showTab._ln) return;
+    var orig = showTab;
+    var wrapped = function (tab) {
+      var btn = document.getElementById('loansTabBtn'), pane = document.getElementById('loansTab');
+      if (btn) btn.classList.toggle('hidden', !allowed());
+      if (tab === 'loans') {
+        if (!allowed()) { tab = 'dashboard'; }
+        else {
+          orig('__none__');                       // 기존 탭 모두 숨김 (기존 로직 그대로)
+          pane.classList.remove('hidden');
+          document.querySelectorAll('#mainTabs .tab').forEach(function (el) { el.classList.toggle('active', el === btn); });
+          listen(); render();
+          return;
+        }
+      }
+      if (pane) pane.classList.add('hidden');
+      if (btn) btn.classList.remove('active');
+      return orig(tab);
+    };
+    wrapped._ln = true;
+    showTab = wrapped;
+    window.showTab = wrapped;
+  }
+
+  /* ── 화면 ── */
+  function setView(v) { st.view = v; render(); }
+  function render() {
+    var root = document.getElementById('loansContent');
+    if (!root || document.getElementById('loansTab').classList.contains('hidden')) return;
+    _nm = nameMap();
+    fillLists();
+    var views = [['summary', '현황'], ['todo', '알림·할 일'], ['ledger', '대여 원장'], ['people', '인별 집계'], ['queue', '대기 등록'], ['rules', '제도 기준']];
+    var td = st.loaded ? todos() : { due: [] };
+    var h = '<div class="ln-head"><div><h2>현장운영자금 대여 관리</h2><p>「현장 운영자금 대여제도 도입방안」(수정 17차) 기준 · 시행일 ' + fmtD(S().startDate) + '</p></div>'
+      + '<div style="display:flex;gap:6px;flex-wrap:wrap;">'
+      + '<label style="font-size:12px;display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" ' + (st.mask ? 'checked' : '') + ' onchange="LN.toggleMask(this.checked)"> 이름 가리기(A~H)</label>'
+      + '<button class="btn btn-primary btn-sm" onclick="LN.openForm()">+ 대여 등록</button></div></div>'
+      + '<div class="ln-sub">' + views.map(function (v) {
+        var badge = v[0] === 'todo' && td.due.length ? ' <span class="badge badge-danger" style="margin-left:2px;padding:1px 5px;">' + td.due.length + '</span>' : '';
+        var qn = v[0] === 'queue' ? qList().filter(function (q) { return q.status === '대기'; }).length : 0;
+        if (qn) badge = ' <span class="badge badge-warning" style="margin-left:2px;padding:1px 5px;">' + qn + '</span>';
+        return '<button class="' + (st.view === v[0] ? 'on' : '') + '" onclick="LN.setView(\'' + v[0] + '\')">' + v[1] + badge + '</button>';
+      }).join('') + '</div>';
+    if (st.error) h += '<div class="ln-alert bad">' + esc(st.error) + '</div>';
+    if (!st.loaded) { root.innerHTML = h + '<div class="card ln-empty">불러오는 중…</div>'; return; }
+    var body = { summary: vSummary, todo: vTodo, ledger: vLedger, people: vPeople, queue: vQueue, rules: vRules }[st.view] || vSummary;
+    root.innerHTML = h + body();
+  }
+  function fillLists() {
+    var b = {}, s = {}, c = {};
+    try { (data.managers || []).forEach(function (m) { if (m && m.name) b[m.name] = 1; }); } catch (e) {}
+    try { (data.sites || []).forEach(function (x) { if (x && x.name) s[x.name] = 1; }); } catch (e) {}
+    try { (data.contractors || []).forEach(function (x) { if (x && x.name) c[x.name] = 1; }); } catch (e) {}
+    list().forEach(function (l) { if (l.borrower) b[l.borrower] = 1; if (l.useSite) s[l.useSite] = 1; if (l.sourceSite) s[l.sourceSite] = 1; if (l.contractor) c[l.contractor] = 1; });
+    var put = function (id, o) { var el = document.getElementById(id); if (el) el.innerHTML = Object.keys(o).sort().map(function (k) { return '<option value="' + esc(k) + '">'; }).join(''); };
+    put('lnBorrowerList', b); put('lnSiteList', s); put('lnContractorList', c);
+  }
+  function yearSel() {
+    var ys = {}; ys[String(new Date().getFullYear())] = 1;
+    list().forEach(function (l) { if (l.loanDate) ys[l.loanDate.slice(0, 4)] = 1; });
+    return '<select onchange="LN.setYear(this.value)">' + Object.keys(ys).sort().reverse().map(function (y) { return '<option value="' + y + '"' + (st.year === y ? ' selected' : '') + '>' + y + '년</option>'; }).join('')
+      + '<option value="all"' + (st.year === 'all' ? ' selected' : '') + '>전체 기간</option></select>';
+  }
+  function bar(label, used, cap) {
+    var p = cap ? Math.min(100, used / cap * 100) : 0, c = p >= 100 ? 'bad' : p >= 80 ? 'warn' : '';
+    return '<div class="ln-bar"><div class="t"><span>' + label + '</span><b>' + man(used) + ' / ' + man(cap) + ' (' + (cap ? (used / cap * 100).toFixed(0) : 0) + '%)</b></div><div class="track"><div class="fill ' + c + '" style="width:' + p + '%"></div></div></div>';
+  }
+  function kpi(k, v, s, cls) { return '<div class="ln-kpi ' + (cls || '') + '"><div class="k">' + k + '</div><div class="v">' + v + '</div><div class="s">' + (s || '&nbsp;') + '</div></div>'; }
+
+  function vSummary() {
+    var all = list(), ls = all.filter(inYear), m = metrics(ls), b = budget(), t = today();
+    if (!all.length) return '<div class="card ln-empty">아직 등록된 대여 건이 없습니다.<br>위의 <b>+ 대여 등록</b>으로 한 건씩 넣거나, <b>대여 원장</b> 탭에서 기존 「대여금 관리대장」 엑셀을 가져오세요.</div>';
+    var h = '<div class="ln-filters">' + yearSel() + '<span class="ln-note">기준일 ' + fmtD(t) + ' · 연장분은 미회수로 계산</span></div>';
+    h += '<div class="ln-kpis">'
+      + kpi('총 집행액', man(m.total), won(m.total))
+      + kpi('건수 / 인원', m.count + '건 / ' + m.peopleCnt + '명')
+      + kpi('회수(상환)액', man(m.repaid), '회수율 ' + pct(m.repaid, m.total))
+      + kpi('미상환 잔액', man(m.balance), won(m.balance), m.balance ? 'warn' : '')
+      + kpi('연장 발생', m.extCnt + '건', man(m.extAmt), m.extCnt ? 'warn' : '')
+      + kpi('연체', m.late + '건', m.late ? man(m.lateAmt) : '없음', m.late ? 'bad' : '')
+      + '</div>';
+    h += '<div class="ln-grid2"><div class="card"><div class="card-header"><span class="card-title">회수 지표</span></div>'
+      + '<div class="ln-tablewrap"><table class="ln-t"><thead><tr><th>지표</th><th class="n">수치</th><th>산출 근거</th></tr></thead><tbody>'
+      + '<tr><td>회수율</td><td class="n"><b>' + pct(m.repaid, m.total) + '</b></td><td class="ln-note">' + won(m.repaid) + ' ÷ ' + won(m.total) + '</td></tr>'
+      + '<tr><td>기일준수율(금액)</td><td class="n"><b>' + pct(m.dueRepaidAmt, m.dueAmt) + '</b></td><td class="ln-note">상환 ' + won(m.dueRepaidAmt) + ' ÷ 도래 ' + won(m.dueAmt) + '</td></tr>'
+      + '<tr><td>기일준수율(건수)</td><td class="n"><b>' + pct(m.dueOkCnt, m.dueCnt) + '</b></td><td class="ln-note">만기 도래 ' + m.dueCnt + '건 중 ' + m.dueOkCnt + '건 상환</td></tr>'
+      + '<tr><td>연장률(건수)</td><td class="n"><b>' + pct(m.extCnt, m.count) + '</b></td><td class="ln-note">' + m.extCnt + '건 ÷ ' + m.count + '건</td></tr>'
+      + '<tr><td>연장률(금액)</td><td class="n"><b>' + pct(m.extAmt, m.total) + '</b></td><td class="ln-note">' + won(m.extAmt) + ' ÷ ' + won(m.total) + '</td></tr>'
+      + '<tr><td>1인 최대</td><td class="n"><b>' + (m.maxPerson ? man(m.maxPerson.amt) : '-') + '</b></td><td class="ln-note">' + (m.maxPerson ? nm(m.maxPerson.name) + ' · ' + m.maxPerson.cnt + '건' : '') + '</td></tr>'
+      + '</tbody></table></div></div>';
+    h += '<div class="card"><div class="card-header"><span class="card-title">예산 통제 (Ⅲ.3)</span><span class="ln-note">시행일 이후 신규 건 기준</span></div>'
+      + bar('연간 집행 (' + t.slice(0, 4) + ')', b.year, S().annualBudget)
+      + bar('분기 집행 (' + quarterOf(t).slice(5) + ')', b.quarter, S().quarterBudget)
+      + bar('동시 미상환 잔액', b.concurrent, S().concurrentCap)
+      + '<div class="ln-note">기존 건(시행 전 집행) 미상환 잔액 <b>' + won(b.legacyBal) + '</b>은 상한 산정에서 제외합니다 (Ⅴ.4).<br>상한 도달 시 신규 신청은 <b>대기 등록</b>으로 접수합니다.</div></div></div>';
+    var late = all.filter(isLate), near = all.filter(function (l) { return l.balance > 0 && !isLate(l) && l.dday !== null && l.dday <= 14; })
+      .sort(function (a, b) { return a.dueDate.localeCompare(b.dueDate); });
+    h += '<div class="card"><div class="card-header"><span class="card-title">연체·미입금 / 14일 내 상환 도래</span></div>';
+    if (!late.length && !near.length) h += '<div class="ln-empty" style="padding:14px;">해당 건이 없습니다.</div>';
+    else h += table(late.concat(near), true);
+    h += '</div>';
+    return h;
+  }
+
+  function table(ls, compact) {
+    if (!ls.length) return '<div class="ln-empty">해당 건이 없습니다.</div>';
+    var sum = { a: 0, r: 0, b: 0 };
+    var rows = ls.map(function (l) {
+      sum.a += l.amount; sum.r += l.repaid; sum.b += l.balance;
+      var dd = l.balance <= 0 ? '' : l.dday === null ? '' : l.dday >= 0 ? 'D-' + l.dday : 'D+' + (-l.dday);
+      return '<tr class="click" onclick="LN.openDetail(\'' + esc(l.id) + '\')">'
+        + '<td>' + nm(l.borrower) + (l.legacy ? ' <span class="badge badge-primary" title="시행일 이전 집행" style="padding:1px 4px;font-size:10px;">기존</span>' : '') + '</td>'
+        + '<td>' + esc(l.sourceSite || l.useSite || '-') + (l.useSite && l.sourceSite && l.useSite !== l.sourceSite ? '<div class="ln-note">사용: ' + esc(l.useSite) + '</div>' : '') + '</td>'
+        + '<td>' + fmtD(l.loanDate) + '</td>'
+        + '<td class="n">' + won(l.amount) + '</td>'
+        + (compact ? '' : '<td class="n">' + (l.repaid ? won(l.repaid) : '-') + '</td>')
+        + '<td class="n">' + (l.balance ? won(l.balance) : '-') + '</td>'
+        + '<td>' + fmtD(l.dueDate) + (l.extensions.length ? '<div class="ln-note">연장 ' + l.extensions.length + '회</div>' : '') + '</td>'
+        + '<td><span class="badge badge-' + l.cls + '">' + l.status + '</span> <span class="ln-note">' + dd + '</span></td></tr>';
+    }).join('');
+    return '<div class="ln-tablewrap"><table class="ln-t"><thead><tr><th>차용자</th><th>상환재원 현장</th><th>대여일</th><th class="n">대여금액</th>' + (compact ? '' : '<th class="n">상환액</th>')
+      + '<th class="n">잔액</th><th>상환일자</th><th>상태</th></tr></thead><tbody>' + rows + '</tbody>'
+      + '<tfoot><tr><td colspan="3">합계 ' + ls.length + '건</td><td class="n">' + won(sum.a) + '</td>' + (compact ? '' : '<td class="n">' + won(sum.r) + '</td>') + '<td class="n">' + won(sum.b) + '</td><td colspan="2"></td></tr></tfoot></table></div>';
+  }
+
+  function vLedger() {
+    var ls = list().filter(inYear);
+    var f = st.filter, q = st.q.trim().toLowerCase();
+    ls = ls.filter(function (l) {
+      if (f === 'active' && l.balance <= 0) return false;
+      if (f === 'late' && !isLate(l)) return false;
+      if (f === 'ext' && !l.extensions.length) return false;
+      if (f === 'done' && l.balance > 0) return false;
+      if (q && [l.borrower, l.useSite, l.sourceSite, l.contractor, l.memo].join(' ').toLowerCase().indexOf(q) < 0) return false;
+      return true;
+    }).sort(function (a, b) { return (b.loanDate || '').localeCompare(a.loanDate || ''); });
+    var fs = [['active', '미상환'], ['late', '연체·미입금'], ['ext', '연장 이력'], ['done', '상환완료'], ['all', '전체']];
+    return '<div class="card"><div class="ln-filters">' + yearSel()
+      + '<select onchange="LN.setFilter(this.value)">' + fs.map(function (x) { return '<option value="' + x[0] + '"' + (f === x[0] ? ' selected' : '') + '>' + x[1] + '</option>'; }).join('') + '</select>'
+      + '<input type="search" placeholder="차용자·현장·시공사 검색" value="' + esc(st.q) + '" oninput="LN.setQ(this.value)" style="min-width:180px;">'
+      + '<span style="flex:1"></span>'
+      + '<button class="btn btn-outline btn-sm" onclick="LN.exportXlsx()">📥 엑셀 저장</button>'
+      + '<button class="btn btn-outline btn-sm" onclick="document.getElementById(\'lnImportFile\').click()">📤 관리대장 가져오기</button>'
+      + '<input type="file" id="lnImportFile" accept=".xlsx,.xls,.csv" style="display:none" onchange="LN.importXlsx(this)">'
+      + (function () { var n = list().filter(function (l) { return l.importedFrom; }).length; return n ? '<button class="btn btn-outline btn-sm" style="color:var(--danger)" onclick="LN.undoImport()">↩ 가져온 건 전체 삭제 (' + n + '건)</button>' : ''; })()
+      + '</div>' + table(ls, false) + '</div>';
+  }
+
+  function vPeople() {
+    var ls = list().filter(inYear), by = {};
+    ls.forEach(function (l) {
+      var p = by[l.borrower] || (by[l.borrower] = { name: l.borrower, cnt: 0, amt: 0, rep: 0, bal: 0, ext: 0, late: 0, last: '', sites: {} });
+      p.cnt++; p.amt += l.amount; p.rep += l.repaid; p.bal += l.balance; if (l.extensions.length) p.ext++; if (isLate(l)) p.late++;
+      if ((l.loanDate || '') > p.last) p.last = l.loanDate; if (l.sourceSite) p.sites[l.sourceSite] = 1;
+    });
+    var ps = Object.keys(by).map(function (k) { return by[k]; }).sort(function (a, b) { return b.amt - a.amt; });
+    if (!ps.length) return '<div class="card"><div class="ln-filters">' + yearSel() + '</div><div class="ln-empty">해당 기간의 대여 건이 없습니다.</div></div>';
+    var tot = { cnt: 0, amt: 0, rep: 0, bal: 0, ext: 0 };
+    var rows = ps.map(function (p) {
+      tot.cnt += p.cnt; tot.amt += p.amt; tot.rep += p.rep; tot.bal += p.bal; tot.ext += p.ext;
+      var stt = p.late ? '<span class="badge badge-danger">연체 · 신규정지</span>' : p.bal ? '<span class="badge badge-warning">미상환</span>' : '<span class="badge badge-success">상환완료</span>';
+      return '<tr class="click" onclick="LN.setQ(\'' + esc(p.name).replace(/'/g, '') + '\', true)"><td>' + nm(p.name) + '</td><td class="n">' + p.cnt + '</td><td class="n">' + won(p.amt) + '</td><td class="n">' + (p.rep ? won(p.rep) : '-') + '</td><td class="n">' + (p.bal ? won(p.bal) : '-') + '</td><td class="n">' + (p.ext || '-') + '</td><td>' + esc(Object.keys(p.sites).join(', ')) + '</td><td>' + fmtD(p.last) + '</td><td>' + stt + '</td></tr>';
+    }).join('');
+    return '<div class="card"><div class="ln-filters">' + yearSel() + '<span class="ln-note">행을 누르면 대여 원장에서 해당 소장 건만 보여줍니다.</span></div><div class="ln-tablewrap"><table class="ln-t"><thead><tr><th>차용자</th><th class="n">건수</th><th class="n">대여 합계</th><th class="n">상환</th><th class="n">미상환</th><th class="n">연장</th><th>상환재원 현장</th><th>최근 대여일</th><th>상태</th></tr></thead><tbody>'
+      + rows + '</tbody><tfoot><tr><td>' + ps.length + '명</td><td class="n">' + tot.cnt + '</td><td class="n">' + won(tot.amt) + '</td><td class="n">' + won(tot.rep) + '</td><td class="n">' + won(tot.bal) + '</td><td class="n">' + tot.ext + '</td><td colspan="3"></td></tr></tfoot></table></div></div>';
+  }
+
+  function vTodo() {
+    var td = todos();
+    var item = function (x, late) {
+      var A = ALARMS[x.a.type], l = x.l, dd = diff(today(), x.a.date);
+      var when = dd === 0 ? '오늘' : dd < 0 ? (-dd) + '일 지남' : dd + '일 후';
+      return '<div class="ln-todo ' + (late ? 'late' : '') + '"><div><div class="who">' + nm(l.borrower) + ' · ' + esc(l.sourceSite || l.useSite || '') + ' <span class="badge badge-' + l.cls + '">' + l.status + '</span></div>'
+        + '<div class="what"><b>' + A.label + '</b> · ' + fmtD(x.a.date) + ' (' + when + ') · 잔액 ' + won(l.balance) + ' · 상환일 ' + fmtD(l.dueDate) + '</div></div>'
+        + '<div style="display:flex;gap:4px;"><button class="btn btn-primary btn-sm" onclick="LN.openAlarm(\'' + esc(l.id) + '\',\'' + x.a.type + '\')">문구·발송 기록</button>'
+        + '<button class="btn btn-outline btn-sm" onclick="LN.openDetail(\'' + esc(l.id) + '\')">상세</button></div></div>';
+    };
+    var h = '<div class="card"><div class="card-header"><span class="card-title">지금 처리할 알림 (' + td.due.length + ')</span><span class="ln-note">발송 후 "발송 기록"을 남기면 목록에서 사라집니다 (최고 이력 · Ⅳ.3)</span></div>';
+    h += td.due.length ? td.due.map(function (x) { return item(x, x.a.type === 'DUE' || x.a.type === 'LATE'); }).join('') : '<div class="ln-empty" style="padding:14px;">처리할 알림이 없습니다.</div>';
+    h += '</div><div class="card"><div class="card-header"><span class="card-title">14일 내 예정 (' + td.soon.length + ')</span></div>';
+    h += td.soon.length ? td.soon.map(function (x) { return item(x, false); }).join('') : '<div class="ln-empty" style="padding:14px;">예정된 알림이 없습니다.</div>';
+    h += '</div><div class="card ln-note"><b>알림 순서 (Ⅳ.3)</b> 집행 당일 안내 → 상환 30일 전 기성 수령일 확인 → 10일 전 안내 → (기성 수령 확인 시 즉시 상환 안내) → 상환일 미입금 독촉 → 7일 경과 연체 확정·기한이익 상실 통지<br>'
+      + '발송 채널은 개인 문자·알림톡만 사용합니다 (현장공유방 등 단체방 사용 금지). 2단계(12.01) 자동 발송 전까지는 문구를 복사해 직접 보내고 기록을 남깁니다.</div>';
+    return h;
+  }
+
+  function qList() { return Object.keys(st.queue).map(function (k) { return st.queue[k]; }).filter(Boolean); }
+  function vQueue() {
+    var t = today(), q = quarterOf(t), used = {};
+    list().forEach(function (l) { if (l.loanDate && quarterOf(l.loanDate) === q) used[l.borrower] = 1; });
+    var wait = qList().filter(function (x) { return x.status === '대기'; }).sort(function (a, b) {
+      var pa = used[a.borrower] ? 1 : 0, pb = used[b.borrower] ? 1 : 0;
+      return pa - pb || (a.date || '').localeCompare(b.date || '');
+    });
+    var past = qList().filter(function (x) { return x.status !== '대기'; }).sort(function (a, b) { return (b.date || '').localeCompare(a.date || ''); }).slice(0, 20);
+    var b = budget();
+    var h = '<div class="card"><div class="card-header"><span class="card-title">대기 등록 (Ⅲ.3)</span><button class="btn btn-outline btn-sm" onclick="LN.openQueue()">+ 대기 접수</button></div>'
+      + '<div class="ln-note" style="margin-bottom:8px;">분기 예산 또는 동시 미상환 상한 도달로 집행할 수 없는 신청은 거절하지 않고 대기로 접수합니다. 순서는 <b>당해 분기 미이용자 우선 → 접수순</b>입니다.<br>'
+      + '현재 여력 — 분기 ' + won(Math.max(0, S().quarterBudget - b.quarter)) + ' · 동시 잔액 ' + won(Math.max(0, S().concurrentCap - b.concurrent)) + '</div>';
+    if (!wait.length) h += '<div class="ln-empty" style="padding:14px;">대기 중인 신청이 없습니다.</div>';
+    else h += '<div class="ln-tablewrap"><table class="ln-t"><thead><tr><th>순번</th><th>접수일</th><th>신청자</th><th>상환재원 현장</th><th class="n">신청금액</th><th>구분</th><th></th></tr></thead><tbody>'
+      + wait.map(function (x, i) {
+        return '<tr><td>' + (i + 1) + '</td><td>' + fmtD(x.date) + '</td><td>' + nm(x.borrower) + '</td><td>' + esc(x.sourceSite || '') + '</td><td class="n">' + won(x.amount) + '</td><td>' + (used[x.borrower] ? '<span class="ln-note">분기 이용자</span>' : '<span class="badge badge-success">분기 미이용 우선</span>') + '</td>'
+          + '<td style="white-space:nowrap;"><button class="btn btn-primary btn-sm" onclick="LN.assignQueue(\'' + esc(x.id) + '\')">배정 → 대여 등록</button> <button class="btn btn-outline btn-sm" onclick="LN.cancelQueue(\'' + esc(x.id) + '\')">취소</button></td></tr>';
+      }).join('') + '</tbody></table></div>';
+    h += '</div>';
+    if (past.length) h += '<div class="card"><div class="card-header"><span class="card-title">처리된 대기 (최근 20건)</span></div><div class="ln-tablewrap"><table class="ln-t"><thead><tr><th>접수일</th><th>신청자</th><th class="n">금액</th><th>결과</th><th>처리일</th></tr></thead><tbody>'
+      + past.map(function (x) { return '<tr><td>' + fmtD(x.date) + '</td><td>' + nm(x.borrower) + '</td><td class="n">' + won(x.amount) + '</td><td>' + esc(x.status) + '</td><td>' + fmtD(x.doneDate) + '</td></tr>'; }).join('') + '</tbody></table></div></div>';
+    return h;
+  }
+
+  function vRules() {
+    var s = S();
+    var rows = [
+      ['목적·성격', '시공 현장의 중단 없는 운영에 필요한 자금 대여. 무이자 금전 대여이며 해당 현장의 기성금을 상환 재원으로 특정해 관리 (채권양도 등 법적 담보권은 설정하지 않음)'],
+      ['대상 현장', '(a) 계약 체결 및 착공 완료 (b) 상환 재원 현장의 미수 또는 잔여 기성 예정액 확인 가능 (c) 해당 시공사 기성 지급 지연 이력 없음 (d) 상환 재원 현장에 미상환 건이 없을 것'],
+      ['대상자', '계약 현장 소장으로서 상환 재원 현장 한도에 여유가 있고 연체 중이 아닌 자. 개인 신용 심사 없음, 등급 차등 없음'],
+      ['현장당 한도', '<b>' + won(s.perSiteLimit) + '</b>와 상환 재원 현장의 미수·잔여 기성 예정액 중 낮은 금액. 동일 현장 복수 건 합계도 한도 이내. 상환분은 즉시 복원, 인당 총액·연간 횟수 제한 없음'],
+      ['상환일자', '차용일로부터 <b>' + s.termDays + '일</b>이 되는 날과 상환 재원 현장 기성금 수령 예정일 중 빠른 날. 상환일자에 전액 상환 (분할은 사전 협의 + 변경합의서)'],
+      ['예산 통제', '연간 <b>' + won(s.annualBudget) + '</b> / 분기 <b>' + won(s.quarterBudget) + '</b> / 동시 미상환 잔액 <b>' + won(s.concurrentCap) + '</b>. 상한 도달 시 신규 집행 정지, 대기 등록 (분기 미이용자 우선 → 접수순)'],
+      ['연장', '횟수 제한 없음. 단, 신청 시점에 상환 재원 현장의 미수·잔여 기성 예정액이 차용 잔액 이상일 때만 승인. 상환일 <b>' + s.extendNoticeDays + '일 전</b>까지 접수, 변경합의서 쌍방 전자서명으로만 효력. 연장은 대표이사 결재'],
+      ['결재', '한도 이내 신규 건: 수석매니저 전결 (집행 전 대표이사 사전 보고 — 보류 의견 시 집행 안 함). 한도 초과·연장: 대표이사 결재'],
+      ['대표 보고 항목', '현장명 · 시공사명 · 공사 진행 · 요청자 · 금액 · 용도 · 상환 재원 현장 · 회수 계획 · 입금 희망일'],
+      ['이용자 의무', '① 기일 내 상환 ② 차용증서 전자서명 ③ 주소·연락처·계좌 변경 즉시 통지 ④ 자금 용도 신고 ⑤ 현장 이탈·계약 해지 시 즉시 상환 ⑥ 타 현장 이용 현황 신고'],
+      ['불이행 시', '연체 시 담당 전 현장 신규 신청 정지. 상환일 <b>' + s.overdueDays + '일</b> 경과 시 연체 확정 → 기한이익 상실 통지 → 독촉(내용증명) → 지급명령 → 확정 → 강제집행'],
+      ['기존 건', '현 조건 유지. 연장 신청 시 기성 담보 요건 적용·개정 차용증서 재작성. 사전알람 소급 적용. 기존 미상환 잔액은 동시 잔액 상한 산정에서 제외'],
+      ['상환 계좌', esc(s.repayAccount)]
+    ];
+    return '<div class="card"><div class="card-header"><span class="card-title">제도 운영 기준 요약</span><button class="btn btn-outline btn-sm" onclick="LN.openSettings()">⚙️ 기준값 변경</button></div>'
+      + '<table class="ln-rule">' + rows.map(function (r) { return '<tr><th>' + r[0] + '</th><td>' + r[1] + '</td></tr>'; }).join('') + '</table>'
+      + '<div class="ln-note" style="margin-top:8px;">시행 일정 — 1단계 2026.11.01 대상·한도·상환·연장·의무 기준 시행 / 2단계 2026.12.01 관리대장 개편(자동 체크·알람·대기 순번)</div></div>';
+  }
+
+  /* ── 모달 공통 ── */
+  function modal(title, body, footer) {
+    document.getElementById('loanModalTitle').textContent = title;
+    document.getElementById('loanModalBody').innerHTML = body;
+    document.getElementById('loanModalFooter').innerHTML = footer;
+    document.getElementById('loanModal').classList.add('active');
+  }
+  function closeModal() { document.getElementById('loanModal').classList.remove('active'); }
+  function val(id) { var el = document.getElementById(id); return el ? (el.type === 'checkbox' ? el.checked : el.value.trim()) : ''; }
+  function fg(label, html, hint) { return '<div class="form-group"><label>' + label + '</label>' + html + (hint ? '<div class="ln-note" style="margin-top:2px;">' + hint + '</div>' : '') + '</div>'; }
+  function inp(id, v, attrs) { return '<input id="' + id + '" value="' + esc(v == null ? '' : v) + '" ' + (attrs || '') + '>'; }
+  function money(id, v) { return inp(id, v ? Number(v).toLocaleString() : '', 'inputmode="numeric" oninput="formatCurrency(this);LN.recheck()"'); }
+
+  /* ── 대여 등록/수정 ── */
+  var _editId = null, _fromQueue = null;
+  function openForm(id, preset) {
+    _editId = id || null; _fromQueue = (preset && preset.queueId) || null;
+    var l = id ? norm(st.loans[id]) : Object.assign({ loanDate: today(), contract: true }, preset || {});
+    var b = '<div class="grid-2">'
+      + fg('차용자(소장) *', inp('lnBorrower', l.borrower, 'list="lnBorrowerList" autocomplete="off" oninput="LN.recheck()"'), '소장님 탭에 등록된 이름이 자동완성됩니다')
+      + fg('시공사', inp('lnContractor', l.contractor, 'list="lnContractorList" autocomplete="off"')) + '</div>'
+      + '<div class="grid-2">'
+      + fg('자금 사용 현장', inp('lnUseSite', l.useSite, 'list="lnSiteList" autocomplete="off"'))
+      + fg('상환 재원 현장 *', inp('lnSourceSite', l.sourceSite, 'list="lnSiteList" autocomplete="off" oninput="LN.recheck()"'), '사용 현장과 다를 수 있음 (준공 현장 미수 → 신규 현장 운영자금)') + '</div>'
+      + '<div class="grid-2">'
+      + fg('대여금액 *', money('lnAmount', l.amount))
+      + fg('상환 재원 현장 미수·잔여 기성 예정액', money('lnSourceRemain', l.sourceRemain), '한도 = ' + man(S().perSiteLimit) + '과 이 금액 중 낮은 금액') + '</div>'
+      + '<div class="grid-3">'
+      + fg('대여일(집행일) *', inp('lnLoanDate', l.loanDate, 'type="date" onchange="LN.autoDue();LN.recheck()"'))
+      + fg('기성금 수령 예정일', inp('lnGisungDate', l.gisungDate, 'type="date" onchange="LN.autoDue()"'))
+      + fg('상환일자 *', inp('lnDueDate', l.dueDate, 'type="date" onchange="LN.recheck()"'), '<span id="lnDueHint"></span>') + '</div>'
+      + '<div class="grid-3">'
+      + fg('자금 용도', inp('lnPurpose', l.purpose, 'placeholder="자재비·노무비 등"'))
+      + fg('대표이사 사전 보고일', inp('lnReportDate', l.reportDate, 'type="date"'))
+      + fg('결재', '<select id="lnApproval"><option value="">자동 판정</option><option' + (l.approval === '수석매니저 전결' ? ' selected' : '') + '>수석매니저 전결</option><option' + (l.approval === '대표이사 결재' ? ' selected' : '') + '>대표이사 결재</option></select>') + '</div>'
+      + '<label style="font-size:12px;display:flex;gap:6px;align-items:center;margin:2px 0 8px;"><input type="checkbox" id="lnContract" ' + (l.contract ? 'checked' : '') + '> 금전차용증서 작성·전자서명 완료 (전건 징구)</label>'
+      + fg('메모', '<textarea id="lnMemo" rows="2">' + esc(l.memo || '') + '</textarea>')
+      + '<div id="lnChecks"></div>';
+    var f = (id ? '<button class="btn btn-danger btn-sm" style="margin-right:auto" onclick="LN.removeLoan(\'' + esc(id) + '\')">삭제</button>' : '')
+      + '<button class="btn btn-outline" onclick="LN.closeModal()">취소</button>'
+      + (id ? '' : '<button class="btn btn-outline" onclick="LN.formToQueue()">대기 등록으로 접수</button>')
+      + '<button class="btn btn-primary" onclick="LN.submitForm()">저장</button>';
+    modal(id ? '대여 건 수정' : '대여 등록', b, f);
+    if (!id && !l.dueDate) autoDue();
+    recheck();
+  }
+  function autoDue() {
+    var ld = val('lnLoanDate'), gd = val('lnGisungDate'); if (!validDate(ld)) return;
+    var by90 = addDays(ld, S().termDays), due = validDate(gd) && gd < by90 ? gd : by90;
+    var el = document.getElementById('lnDueDate'); if (el && (!_editId || !el.value)) el.value = due;
+    var h = document.getElementById('lnDueHint');
+    if (h) h.textContent = '기준: ' + S().termDays + '일(' + fmtD(by90) + ')' + (validDate(gd) ? ' · 기성 ' + fmtD(gd) : '') + ' 중 빠른 날';
+  }
+  function checks(f) {
+    var out = [], s = S(), ls = list().filter(function (l) { return l.id !== _editId; });
+    var legacy = f.loanDate && f.loanDate < s.startDate;
+    if (legacy) { out.push(['wa', '시행일(' + fmtD(s.startDate) + ') 이전 집행 — 기존 건으로 등록 (한도·예산 체크 제외)']); return { list: out, overLimit: false, overBudget: false, blocked: false }; }
+    var late = ls.filter(function (l) { return l.borrower && l.borrower === f.borrower && isLate(l); });
+    var blocked = late.length > 0;
+    out.push(blocked ? ['no', '차용자 연체·미입금 ' + late.length + '건 — 상환 완료 시까지 신규 신청 정지 (Ⅲ.6)'] : ['ok', '차용자 연체 없음']);
+    var srcOpen = ls.filter(function (l) { return f.sourceSite && l.sourceSite === f.sourceSite && l.balance > 0; });
+    var srcBal = srcOpen.reduce(function (a, l) { return a + l.balance; }, 0);
+    var limit = f.sourceRemain > 0 ? Math.min(s.perSiteLimit, f.sourceRemain) : s.perSiteLimit;
+    var room = Math.max(0, limit - srcBal), overLimit = f.amount > room;
+    if (!f.sourceRemain) out.push(['wa', '상환 재원 현장의 미수·잔여 기성 예정액 미입력 — 확인 필요 (요건 b)']);
+    out.push(overLimit ? ['no', '현장당 한도 초과 — 한도 ' + won(limit) + ' − 기존 잔액 ' + won(srcBal) + ' = 가능 ' + won(room) + ' → 대표이사 결재']
+                       : ['ok', '현장당 한도 이내 — 한도 ' + won(limit) + ', 기존 잔액 ' + won(srcBal) + ', 가능 ' + won(room)]);
+    if (srcOpen.length) out.push(['wa', '상환 재원 현장에 미상환 ' + srcOpen.length + '건 있음 — 대상 요건 (d) 확인']);
+    var b = budget(_editId), t = today(), overBudget = false;
+    var sameQ = f.loanDate && quarterOf(f.loanDate) === quarterOf(t), sameY = f.loanDate && f.loanDate.slice(0, 4) === t.slice(0, 4);
+    if (sameQ && b.quarter + f.amount > s.quarterBudget) { overBudget = true; out.push(['no', '분기 예산 초과 — 사용 ' + won(b.quarter) + ' + ' + won(f.amount) + ' > ' + won(s.quarterBudget)]); }
+    if (sameY && b.year + f.amount > s.annualBudget) { overBudget = true; out.push(['no', '연간 예산 초과 — 사용 ' + won(b.year) + ' + ' + won(f.amount) + ' > ' + won(s.annualBudget)]); }
+    if (b.concurrent + f.amount > s.concurrentCap) { overBudget = true; out.push(['no', '동시 미상환 상한 초과 — 잔액 ' + won(b.concurrent) + ' + ' + won(f.amount) + ' > ' + won(s.concurrentCap)]); }
+    if (!overBudget) out.push(['ok', '예산 여력 있음 — 분기 ' + won(s.quarterBudget - b.quarter) + ' · 동시 잔액 ' + won(s.concurrentCap - b.concurrent)]);
+    if (validDate(f.loanDate) && validDate(f.dueDate) && diff(f.loanDate, f.dueDate) > s.termDays) out.push(['wa', '상환일자가 대여일로부터 ' + s.termDays + '일을 넘습니다']);
+    if (!f.contract) out.push(['wa', '금전차용증서 미징구 — 대여금은 차용증서가 유일한 회계 증빙']);
+    return { list: out, overLimit: overLimit, overBudget: overBudget, blocked: blocked };
+  }
+  function readForm() {
+    return { borrower: val('lnBorrower'), contractor: val('lnContractor'), useSite: val('lnUseSite'), sourceSite: val('lnSourceSite'),
+      amount: num(val('lnAmount')), sourceRemain: num(val('lnSourceRemain')), loanDate: val('lnLoanDate'), gisungDate: val('lnGisungDate'),
+      dueDate: val('lnDueDate'), purpose: val('lnPurpose'), reportDate: val('lnReportDate'), approval: val('lnApproval'), contract: val('lnContract'), memo: val('lnMemo') };
+  }
+  function recheck() {
+    var box = document.getElementById('lnChecks'); if (!box) return;
+    var f = readForm(), c = checks(f), ic = { ok: '✔', no: '✖', wa: '⚠' };
+    var auto = c.overLimit ? '대표이사 결재' : '수석매니저 전결';
+    var legacy = f.loanDate && f.loanDate < S().startDate;
+    box.innerHTML = '<div class="ln-checks"><div style="font-weight:600;">자동 확인 (Ⅲ. 운영 기준)' + (legacy ? '' : ' · 결재 판정: <b>' + auto + '</b>') + '</div>'
+      + c.list.map(function (x) { return '<div class="' + x[0] + '"><span>' + ic[x[0]] + '</span><span>' + esc(x[1]) + '</span></div>'; }).join('')
+      + (c.overBudget ? '<div class="wa"><span>→</span><span>예산·상한 초과 신청은 <b>대기 등록으로 접수</b>를 권장합니다</span></div>' : '') + '</div>';
+    if (document.getElementById('lnDueHint') && !document.getElementById('lnDueHint').textContent) autoDue();
+  }
+  function submitForm() {
+    var f = readForm();
+    if (!f.borrower || !f.sourceSite || !f.amount || !validDate(f.loanDate) || !validDate(f.dueDate)) { msg('필수 항목(*)을 입력하세요'); return; }
+    var c = checks(f);
+    if (c.blocked && !confirm('차용자에게 연체·미입금 건이 있어 신규 신청 정지 대상입니다.\n그래도 저장할까요?')) return;
+    if (c.overBudget && !_editId && !confirm('예산 또는 동시 미상환 상한을 초과합니다.\n대기 등록 대신 바로 대여로 저장할까요?')) return;
+    if (!f.approval && !(f.loanDate < S().startDate)) f.approval = c.overLimit ? '대표이사 결재' : '수석매니저 전결';
+    var l = _editId ? Object.assign({}, st.loans[_editId], f) : Object.assign({ id: uid('ln_'), createdAt: new Date().toISOString(), createdBy: who(), repayments: [], extensions: [], alarms: [] }, f);
+    if (!l.origDueDate || !arr(l.extensions).length) l.origDueDate = f.dueDate;
+    saveLoan(l).then(function (ok) {
+      if (!ok) return;
+      if (_fromQueue && st.queue[_fromQueue]) saveQueue(Object.assign({}, st.queue[_fromQueue], { status: '배정', doneDate: today(), loanId: l.id }));
+      msg(_editId ? '수정했습니다' : '대여 건을 등록했습니다'); closeModal();
+    });
+  }
+  function removeLoan(id) {
+    var l = st.loans[id]; if (!l) return;
+    if (!confirm((l.borrower || '') + ' ' + won(l.amount) + ' 대여 건을 삭제할까요?\n상환·연장·알림 기록도 함께 삭제됩니다.')) return;
+    delete st.loans[id]; render(); closeModal();
+    ref('loans/' + id).remove().then(function () { msg('삭제했습니다'); }).catch(fail);
+  }
+
+  /* ── 상세 ── */
+  function openDetail(id) {
+    var l = norm(st.loans[id]); if (!l.id) return;
+    var row = function (k, v) { return '<tr><th>' + k + '</th><td>' + v + '</td></tr>'; };
+    var b = '<table class="ln-rule" style="font-size:12px;width:100%;border-collapse:collapse;">'
+      + row('차용자', nm(l.borrower) + ' <span class="badge badge-' + l.cls + '">' + l.status + '</span>' + (l.legacy ? ' <span class="badge badge-primary">기존 건</span>' : ''))
+      + row('현장', '상환재원 <b>' + esc(l.sourceSite || '-') + '</b>' + (l.useSite ? ' · 사용 ' + esc(l.useSite) : '') + (l.contractor ? ' · 시공사 ' + esc(l.contractor) : ''))
+      + row('금액', '대여 <b>' + won(l.amount) + '</b> · 상환 ' + won(l.repaid) + ' · 잔액 <b>' + won(l.balance) + '</b>')
+      + row('일자', '대여 ' + fmtD(l.loanDate) + ' · 상환일자 <b>' + fmtD(l.dueDate) + '</b>' + (l.origDue && l.origDue !== l.dueDate ? ' (최초 ' + fmtD(l.origDue) + ')' : '') + (l.gisungDate ? ' · 기성 수령 예정 ' + fmtD(l.gisungDate) : ''))
+      + row('보고·결재', (l.reportDate ? '대표 보고 ' + fmtD(l.reportDate) + ' · ' : '') + esc(l.approval || '-') + ' · 차용증서 ' + (l.contract ? '징구' : '<span style="color:var(--danger)">미징구</span>'))
+      + (l.purpose ? row('용도', esc(l.purpose)) : '') + (l.memo ? row('메모', esc(l.memo).replace(/\n/g, '<br>')) : '')
+      + '</table>';
+    b += '<div class="section-title">상환 내역</div><div class="ln-hist">' + (l.repayments.length ? l.repayments.map(function (r, i) {
+      return '<div>' + fmtD(r.date) + ' · <b>' + won(r.amount) + '</b>' + (r.memo ? ' · ' + esc(r.memo) : '') + ' <a href="javascript:void 0" style="color:var(--text-light);font-size:11px;" onclick="LN.delSub(\'' + esc(id) + '\',\'repayments\',' + i + ')">삭제</a></div>';
+    }).join('') : '<div class="ln-note">없음</div>') + '</div>';
+    b += '<div class="section-title">연장 이력</div><div class="ln-hist">' + (l.extensions.length ? l.extensions.map(function (x, i) {
+      return '<div>' + (i + 1) + '차 · ' + (x.date ? '신청 ' + fmtD(x.date) + ' · ' : '') + (x.from || x.to ? fmtD(x.from) + ' → <b>' + fmtD(x.to) + '</b>' : '날짜 미기재') + ' · ' + esc(x.reason || '') + (x.sourceRemain ? ' · 잔여기성 ' + won(x.sourceRemain) : '') + (x.imported ? '' : x.agreement ? ' · 변경합의서 ✔' : ' · <span style="color:var(--danger)">변경합의서 미서명</span>') + (x.ceo ? ' · 대표 결재 ✔' : '') + '</div>';
+    }).join('') : '<div class="ln-note">없음</div>') + '</div>';
+    var sch = schedule(l);
+    b += '<div class="section-title">알림 일정·발송 기록</div><div class="ln-hist">' + (sch.length ? sch.map(function (a) {
+      return '<div>' + (a.done ? '✔' : (a.date <= today() ? '<span style="color:var(--danger)">●</span>' : '○')) + ' ' + fmtD(a.date) + ' · ' + ALARMS[a.type].label + (a.done ? '' : ' <a href="javascript:void 0" onclick="LN.openAlarm(\'' + esc(id) + '\',\'' + a.type + '\')">문구·기록</a>') + '</div>';
+    }).join('') : '<div class="ln-note">상환 완료 — 알림 없음</div>')
+      + (l.alarms.length ? '<div style="margin-top:6px;font-weight:600;">발송 이력</div>' + l.alarms.map(function (a) { return '<div>' + fmtD(a.date) + ' · ' + esc((ALARMS[a.type] || {}).label || a.type) + ' · ' + esc(a.channel || '') + (a.memo ? ' · ' + esc(a.memo) : '') + (a.skipped ? ' (건너뜀)' : '') + '</div>'; }).join('') : '') + '</div>';
+    var f = '<button class="btn btn-outline btn-sm" style="margin-right:auto" onclick="LN.openForm(\'' + esc(id) + '\')">수정</button>'
+      + (l.balance > 0 ? '<button class="btn btn-outline btn-sm" onclick="LN.openAlarm(\'' + esc(id) + '\',\'GIS\')">기성 수령 확인</button>'
+        + '<button class="btn btn-warning btn-sm" onclick="LN.openExtend(\'' + esc(id) + '\')">연장</button>'
+        + '<button class="btn btn-success btn-sm" onclick="LN.openRepay(\'' + esc(id) + '\')">상환 입력</button>' : '')
+      + '<button class="btn btn-outline btn-sm" onclick="LN.closeModal()">닫기</button>';
+    modal('대여 상세', b, f);
+  }
+  function delSub(id, key, i) {
+    if (!confirm('이 기록을 삭제할까요?')) return;
+    var l = Object.assign({}, st.loans[id]); var a = arr(l[key]); a.splice(i, 1); l[key] = a;
+    if (key === 'extensions') { l.dueDate = a.length ? a[a.length - 1].to : (l.origDueDate || l.dueDate); }
+    saveLoan(l).then(function (ok) { if (ok) openDetail(id); });
+  }
+
+  /* ── 상환 ── */
+  function openRepay(id) {
+    var l = norm(st.loans[id]);
+    var b = '<div class="ln-note" style="margin-bottom:8px;">' + nm(l.borrower) + ' · 잔액 <b>' + won(l.balance) + '</b> · 상환일자 ' + fmtD(l.dueDate) + '</div><div class="grid-2">'
+      + fg('입금일 *', inp('lnRpDate', today(), 'type="date"')) + fg('입금액 *', inp('lnRpAmt', l.balance.toLocaleString(), 'inputmode="numeric" oninput="formatCurrency(this)"'), '분할 상환은 사전 협의 + 변경합의서 필요') + '</div>'
+      + fg('메모', inp('lnRpMemo', '', 'placeholder="예: 기성 수령 후 상환"'));
+    modal('상환 입력', b, '<button class="btn btn-outline" onclick="LN.openDetail(\'' + esc(id) + '\')">뒤로</button><button class="btn btn-success" onclick="LN.submitRepay(\'' + esc(id) + '\')">저장</button>');
+  }
+  function submitRepay(id) {
+    var d = val('lnRpDate'), a = num(val('lnRpAmt'));
+    if (!validDate(d) || a <= 0) { msg('입금일과 입금액을 입력하세요'); return; }
+    var l = Object.assign({}, st.loans[id]), n = norm(l);
+    if (a > n.balance && !confirm('입금액이 잔액(' + won(n.balance) + ')보다 큽니다. 저장할까요?')) return;
+    l.repayments = arr(l.repayments).concat([{ date: d, amount: a, memo: val('lnRpMemo'), by: who() }]);
+    saveLoan(l).then(function (ok) { if (ok) { msg(a >= n.balance ? '상환 완료 처리했습니다' : '상환을 기록했습니다'); openDetail(id); } });
+  }
+
+  /* ── 연장 (Ⅲ.4) ── */
+  function openExtend(id) {
+    var l = norm(st.loans[id]), s = S(), t = today();
+    var dl = diff(t, l.dueDate), lateReq = dl < s.extendNoticeDays;
+    var b = (lateReq ? '<div class="ln-alert">상환일까지 ' + dl + '일 — 연장 신청은 상환일 ' + s.extendNoticeDays + '일 전까지 접수해야 합니다 (차용증서 제3조)</div>' : '')
+      + (l.legacy ? '<div class="ln-alert">기존 건 — 연장 시 개정 차용증서를 재작성하고 기성 담보 요건을 적용합니다 (Ⅴ.4)</div>' : '')
+      + '<div class="ln-note" style="margin-bottom:8px;">' + nm(l.borrower) + ' · 잔액 <b>' + won(l.balance) + '</b> · 현재 상환일자 ' + fmtD(l.dueDate) + ' · 연장 ' + l.extensions.length + '회</div>'
+      + '<div class="grid-3">' + fg('신청일', inp('lnExDate', t, 'type="date"')) + fg('변경 상환일자 *', inp('lnExTo', addDays(l.dueDate, 30), 'type="date"'))
+      + fg('상환재원 현장 잔여 기성 예정액 *', inp('lnExRemain', l.sourceRemain ? Number(l.sourceRemain).toLocaleString() : '', 'inputmode="numeric" oninput="formatCurrency(this);LN.exCheck(' + l.balance + ')"')) + '</div>'
+      + fg('연장 사유 *', inp('lnExReason', '', 'placeholder="예: 발주처 준공잔금 정산일 변경(10/25~10/31 입금)"'))
+      + '<label style="font-size:12px;display:flex;gap:6px;align-items:center;margin:4px 0;"><input type="checkbox" id="lnExAgree"> 변경합의서 쌍방 전자서명 완료 (전화·메시지 협의는 효력 없음)</label>'
+      + '<label style="font-size:12px;display:flex;gap:6px;align-items:center;margin:4px 0 8px;"><input type="checkbox" id="lnExCeo"> 대표이사 결재 완료 (연장은 전결 제외)</label>'
+      + '<div id="lnExCheck" class="ln-checks"><div class="wa">⚠ 잔여 기성 예정액을 입력하면 연장 가능 여부를 확인합니다</div></div>';
+    modal('연장 처리', b, '<button class="btn btn-outline" onclick="LN.openDetail(\'' + esc(id) + '\')">뒤로</button><button class="btn btn-warning" onclick="LN.submitExtend(\'' + esc(id) + '\')">연장 저장</button>');
+    if (l.sourceRemain) exCheck(l.balance);
+  }
+  function exCheck(balance) {
+    var r = num(val('lnExRemain')), el = document.getElementById('lnExCheck'); if (!el) return;
+    el.innerHTML = r >= balance ? '<div class="ok">✔ 잔여 기성 ' + won(r) + ' ≥ 차용 잔액 ' + won(balance) + ' — 연장 승인 요건 충족</div>'
+      : '<div class="no">✖ 잔여 기성 ' + won(r) + ' < 차용 잔액 ' + won(balance) + ' — 연장 불가. 상환 또는 연체 절차 (Ⅲ.4)</div>';
+  }
+  function submitExtend(id) {
+    var l = Object.assign({}, st.loans[id]), n = norm(l);
+    var to = val('lnExTo'), reason = val('lnExReason'), remain = num(val('lnExRemain'));
+    if (!validDate(to) || !reason || !remain) { msg('변경 상환일자·사유·잔여 기성 예정액을 입력하세요'); return; }
+    if (to <= l.dueDate && !confirm('변경 상환일자가 현재 상환일자보다 빠르거나 같습니다. 저장할까요?')) return;
+    if (remain < n.balance && !confirm('잔여 기성 예정액이 차용 잔액보다 적어 연장 승인 요건에 맞지 않습니다.\n그래도 기록할까요?')) return;
+    if (!val('lnExAgree') && !confirm('변경합의서 서명이 확인되지 않았습니다. 그래도 기록할까요?')) return;
+    if (!l.origDueDate) l.origDueDate = l.dueDate;
+    l.extensions = arr(l.extensions).concat([{ date: val('lnExDate') || today(), from: l.dueDate, to: to, reason: reason, sourceRemain: remain, agreement: !!val('lnExAgree'), ceo: !!val('lnExCeo'), by: who() }]);
+    l.dueDate = to; l.sourceRemain = remain;
+    saveLoan(l).then(function (ok) { if (ok) { msg('연장을 기록했습니다 — 새 상환일자 ' + fmtD(to)); openDetail(id); } });
+  }
+
+  /* ── 알림 문구·발송 기록 ── */
+  function openAlarm(id, type) {
+    var l = norm(st.loans[id]), A = ALARMS[type];
+    var b = '<div class="ln-note" style="margin-bottom:6px;">' + A.desc + '</div>'
+      + '<textarea id="lnMsg" class="ln-msg">' + esc(template(l, type)) + '</textarea>'
+      + '<div style="margin:6px 0 10px;"><button class="btn btn-outline btn-sm" onclick="LN.copyMsg()">📋 문구 복사</button></div>'
+      + '<div class="grid-3">' + fg('발송일', inp('lnAlDate', today(), 'type="date"'))
+      + fg('채널', '<select id="lnAlCh"><option>개인 문자</option><option>알림톡</option><option>전화</option><option>내용증명</option></select>', '단체방 사용 금지')
+      + fg('수신 확인·메모', inp('lnAlMemo', '', 'placeholder="예: 읽음, 10/20 입금 약속"'))
+      + '</div>' + (type === 'GIS' ? fg('수령 확인된 기성 예정액(선택)', inp('lnAlRemain', '', 'inputmode="numeric" oninput="formatCurrency(this)"')) : '');
+    modal(A.label, b, '<button class="btn btn-outline" style="margin-right:auto" onclick="LN.saveAlarm(\'' + esc(id) + '\',\'' + type + '\',true)">발송 안 함(건너뜀)</button>'
+      + '<button class="btn btn-outline" onclick="LN.closeModal()">닫기</button><button class="btn btn-primary" onclick="LN.saveAlarm(\'' + esc(id) + '\',\'' + type + '\')">발송 기록 저장</button>');
+  }
+  function copyMsg() {
+    var el = document.getElementById('lnMsg'); el.select();
+    var done = function () { msg('문구를 복사했습니다'); };
+    if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(el.value).then(done, function () { document.execCommand('copy'); done(); });
+    else { document.execCommand('copy'); done(); }
+  }
+  function saveAlarm(id, type, skipped) {
+    var l = Object.assign({}, st.loans[id]);
+    var rec = { type: type, due: l.dueDate, date: val('lnAlDate') || today(), channel: skipped ? '' : val('lnAlCh'), memo: val('lnAlMemo'), by: who() };
+    if (skipped) rec.skipped = true;
+    l.alarms = arr(l.alarms).concat([rec]);
+    if (type === 'GIS' && num(val('lnAlRemain'))) l.sourceRemain = num(val('lnAlRemain'));
+    saveLoan(l).then(function (ok) { if (ok) { msg(skipped ? '건너뜀으로 기록했습니다' : '발송 기록을 저장했습니다'); closeModal(); } });
+  }
+
+  /* ── 대기 등록 ── */
+  function saveQueue(x) { st.queue[x.id] = x; render(); return ref('queue/' + x.id).set(clean(x)).then(function () { return true; }).catch(fail); }
+  function openQueue(preset) {
+    preset = preset || {};
+    var b = '<div class="grid-2">' + fg('신청자(소장) *', inp('lnQB', preset.borrower, 'list="lnBorrowerList" autocomplete="off"')) + fg('접수일 *', inp('lnQD', today(), 'type="date"')) + '</div>'
+      + '<div class="grid-2">' + fg('상환 재원 현장', inp('lnQS', preset.sourceSite, 'list="lnSiteList" autocomplete="off"')) + fg('신청금액 *', inp('lnQA', preset.amount ? Number(preset.amount).toLocaleString() : '', 'inputmode="numeric" oninput="formatCurrency(this)"')) + '</div>'
+      + fg('메모', inp('lnQM', preset.memo || ''));
+    modal('대기 접수', b, '<button class="btn btn-outline" onclick="LN.closeModal()">취소</button><button class="btn btn-primary" onclick="LN.submitQueue()">접수</button>');
+  }
+  function submitQueue() {
+    var x = { id: uid('lq_'), borrower: val('lnQB'), date: val('lnQD'), sourceSite: val('lnQS'), amount: num(val('lnQA')), memo: val('lnQM'), status: '대기', createdBy: who() };
+    if (!x.borrower || !validDate(x.date) || !x.amount) { msg('필수 항목(*)을 입력하세요'); return; }
+    saveQueue(x).then(function (ok) { if (ok) { msg('대기로 접수했습니다'); closeModal(); st.view = 'queue'; render(); } });
+  }
+  function formToQueue() {
+    var f = readForm(); if (!f.borrower || !f.amount) { msg('차용자와 금액을 입력하세요'); return; }
+    openQueue({ borrower: f.borrower, sourceSite: f.sourceSite, amount: f.amount, memo: f.memo });
+  }
+  function assignQueue(id) { var x = st.queue[id]; if (!x) return; openForm(null, { borrower: x.borrower, sourceSite: x.sourceSite, amount: x.amount, memo: x.memo, queueId: id }); }
+  function cancelQueue(id) { var x = st.queue[id]; if (!x || !confirm('대기 신청을 취소할까요?')) return; saveQueue(Object.assign({}, x, { status: '취소', doneDate: today() })); }
+
+  /* ── 기준값 설정 ── */
+  function openSettings() {
+    var s = S();
+    var b = '<div class="ln-alert">도입방안 수치가 바뀔 때만 변경하세요. 변경 내용은 모든 관리자 화면에 바로 반영됩니다.</div><div class="grid-2">'
+      + fg('제도 시행일', inp('lnSStart', s.startDate, 'type="date"')) + fg('현장당 한도', inp('lnSLimit', s.perSiteLimit.toLocaleString(), 'oninput="formatCurrency(this)"'))
+      + fg('연간 총 집행액', inp('lnSYear', s.annualBudget.toLocaleString(), 'oninput="formatCurrency(this)"')) + fg('분기 집행액', inp('lnSQ', s.quarterBudget.toLocaleString(), 'oninput="formatCurrency(this)"'))
+      + fg('동시 미상환 잔액 상한', inp('lnSCap', s.concurrentCap.toLocaleString(), 'oninput="formatCurrency(this)"')) + fg('대여기간(일)', inp('lnSTerm', s.termDays, 'type="number"'))
+      + fg('연체 확정(상환일 후 일수)', inp('lnSOver', s.overdueDays, 'type="number"')) + fg('연장 신청 기한(상환일 전 일수)', inp('lnSExt', s.extendNoticeDays, 'type="number"'))
+      + '</div>' + fg('상환 계좌 (안내 문구에 들어감)', inp('lnSAcc', s.repayAccount));
+    modal('기준값 변경', b, '<button class="btn btn-outline" style="margin-right:auto" onclick="LN.resetSettings()">도입방안 기본값으로</button><button class="btn btn-outline" onclick="LN.closeModal()">취소</button><button class="btn btn-primary" onclick="LN.submitSettings()">저장</button>');
+  }
+  function putSettings(o) { st.settings = Object.assign({}, DEFAULTS, o); render(); return ref('settings').set(clean(o)).then(function () { msg('기준값을 저장했습니다'); closeModal(); }).catch(fail); }
+  function submitSettings() {
+    putSettings({ startDate: val('lnSStart') || DEFAULTS.startDate, perSiteLimit: num(val('lnSLimit')), annualBudget: num(val('lnSYear')), quarterBudget: num(val('lnSQ')),
+      concurrentCap: num(val('lnSCap')), termDays: num(val('lnSTerm')) || 90, overdueDays: num(val('lnSOver')) || 7, extendNoticeDays: num(val('lnSExt')) || 3, repayAccount: val('lnSAcc') });
+  }
+  function resetSettings() { if (confirm('도입방안(수정 17차) 기본값으로 되돌릴까요?')) putSettings(Object.assign({}, DEFAULTS)); }
+
+  /* ── 엑셀 ── */
+  function exportXlsx() {
+    if (typeof XLSX === 'undefined') { msg('엑셀 모듈을 불러오지 못했습니다'); return; }
+    _nm = nameMap();
+    var name = function (n) { return st.mask ? (_nm[n] || '?') + ' 소장' : n; };
+    var ls = list().filter(inYear).sort(function (a, b) { return (a.loanDate || '').localeCompare(b.loanDate || ''); });
+    var r1 = ls.map(function (l, i) {
+      return { 'No': i + 1, '차용자': name(l.borrower), '시공사': l.contractor || '', '자금 사용 현장': l.useSite || '', '상환 재원 현장': l.sourceSite || '', '대여일': l.loanDate || '', '대여금액': l.amount,
+        '최초 상환일자': l.origDue || '', '현재 상환일자': l.dueDate || '', '연장 횟수': l.extensions.length, '상환액': l.repaid, '잔액': l.balance,
+        '최종 상환일': l.repayments.length ? l.repayments[l.repayments.length - 1].date : '', '상태': l.status, '구분': l.legacy ? '기존' : '신규', '결재': l.approval || '',
+        '대표 보고일': l.reportDate || '', '용도': l.purpose || '', '차용증서': l.contract ? 'O' : 'X',
+        '연장 사유': l.extensions.map(function (x) { return fmtD(x.from) + '→' + fmtD(x.to) + ' ' + (x.reason || ''); }).join(' / '), '메모': l.memo || '' };
+    });
+    var by = {}; ls.forEach(function (l) { var p = by[l.borrower] || (by[l.borrower] = { '차용자': name(l.borrower), '건수': 0, '대여 합계': 0, '상환': 0, '미상환': 0, '연장 건수': 0 }); p['건수']++; p['대여 합계'] += l.amount; p['상환'] += l.repaid; p['미상환'] += l.balance; if (l.extensions.length) p['연장 건수']++; });
+    var r3 = []; ls.forEach(function (l) { l.alarms.forEach(function (a) { r3.push({ '차용자': name(l.borrower), '상환 재원 현장': l.sourceSite || '', '알림': (ALARMS[a.type] || {}).label || a.type, '발송일': a.date, '채널': a.channel || '', '대상 상환일': a.due || '', '메모': a.memo || '', '건너뜀': a.skipped ? 'O' : '' }); }); });
+    var wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(r1.length ? r1 : [{ '안내': '데이터 없음' }]), '대여금관리대장');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(Object.keys(by).map(function (k) { return by[k]; })), '대여 현황');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(r3.length ? r3 : [{ '안내': '발송 이력 없음' }]), '알림 이력');
+    XLSX.writeFile(wb, '대여금관리대장_' + today().replace(/-/g, '') + (st.mask ? '_익명' : '') + '.xlsx');
+  }
+  function xDate(v) {
+    if (v == null || v === '') return '';
+    if (v instanceof Date && !isNaN(v)) { v = new Date(v.getTime() + 432e5); } if (v instanceof Date && !isNaN(v)) return v.getFullYear() + '-' + pad(v.getMonth() + 1) + '-' + pad(v.getDate());
+    if (typeof v === 'number' && v > 20000 && v < 80000) { var d = new Date((Math.floor(v + 0.001) - 25569) * 864e5); return d.getUTCFullYear() + '-' + pad(d.getUTCMonth() + 1) + '-' + pad(d.getUTCDate()); }
+    var m = String(v).trim().match(/(\d{2,4})[.\-\/년\s]+(\d{1,2})[.\-\/월\s]+(\d{1,2})/);
+    if (m) { var y = +m[1]; if (y < 100) y += 2000; return y + '-' + pad(+m[2]) + '-' + pad(+m[3]); }
+    return '';
+  }
+  function importXlsx(input) {
+    var file = input.files && input.files[0]; input.value = ''; if (!file) return;
+    if (typeof XLSX === 'undefined') { msg('엑셀 모듈을 불러오지 못했습니다'); return; }
+    var rd = new FileReader();
+    rd.onload = function (e) {
+      try {
+        var wb = XLSX.read(new Uint8Array(e.target.result), { type: 'array', cellDates: false });
+        var sn = wb.SheetNames.filter(function (n) { return /관리대장|원장|대여금/.test(n); })[0] || wb.SheetNames[0];
+        var rows = XLSX.utils.sheet_to_json(wb.Sheets[sn], { header: 1, defval: '', raw: true });
+        var keys = {
+          borrower: /차용자|채무자|소장|성명|이름/, sourceSite: /상환.?재원|재원.?현장/, useSite: /사용.?현장|^현장명?$/, contractor: /시공사|업체/,
+          loanDate: /대여일|차용일|지급일|집행일/, amount: /대여.?금액|차용.?금액|대여금$|^금액|지급.?금액/,
+          origDue: /^최초|최초.?(상환|회수|만기)|^회수.?예정일$|^상환.?예정일$/, dueDate: /^만기일?$|연장.?(회수|상환).?예정일|현재.?상환|변경.?(상환|회수)/,
+          extCnt: /연장.?횟수|연장.?회차/, repaidAmt: /^상환.?금액|^상환액|^회수.?금액|^회수액/, repaidDate: /실.?상환일|^상환일$|^회수일$|^입금일|최종.?상환일/,
+          status: /상환.?상태|^상태$/, plan: /회수.?계획|상환.?계획/, reason: /연장.?사유/, purpose: /용도|대여.?사유|^사유/, memo: /비고|메모/
+        };
+        var txt = function (v) { return String(v == null ? '' : v).replace(/\s/g, ''); };
+        var scan = function (hdr) {
+          var c = {};
+          hdr.forEach(function (h, j) {
+            h = txt(h); if (!h) return;
+            Object.keys(keys).forEach(function (k) {
+              if (c[k] !== undefined || !keys[k].test(h)) return;
+              if (k === 'useSite' && keys.sourceSite.test(h)) return;
+              if (k === 'purpose' && keys.reason.test(h)) return;
+              c[k] = j;
+            });
+          });
+          return c;
+        };
+        // 머리글 찾기: 두 줄 머리글(예: 상환예정일 → 최초/연장/만기일)이면 아래 줄 이름을 우선 사용
+        var hi = -1, start = -1, col = {}, hdrRow = [];
+        for (var r = 0; r < Math.min(rows.length, 15) && hi < 0; r++) {
+          var top = rows[r], c1 = scan(top);
+          if (c1.borrower === undefined || c1.amount === undefined || c1.loanDate === undefined) continue;
+          var sub = rows[r + 1] || [], isSub = sub.some(function (v) { return txt(v); }) && !txt(sub[c1.borrower]) && !num(sub[c1.amount]);
+          var hdr = top.map(function (v, j) { return isSub && txt(sub[j]) ? sub[j] : v; });
+          hi = r; start = r + (isSub ? 2 : 1); col = scan(hdr); hdrRow = hdr;
+        }
+        if (hi < 0) { msg('머리글(차용자·대여일·대여금액)을 찾지 못했습니다'); return; }
+        var g = function (row, k) { return col[k] === undefined ? '' : row[col[k]]; };
+        var s_ = function (row, k) { return String(g(row, k) == null ? '' : g(row, k)).trim(); };
+        var siteFromPlan = function (p) { return String(p || '').replace(/\s*(준공\s*잔금|중도금|잔금|기성금?|선급금)\s*(수령|수금|입금).*$/, '').trim(); };
+        // 이전에 엑셀로 가져온 건은 이번 파일 내용으로 교체 (직접 등록한 건은 유지)
+        var replaced = list().filter(function (l) { return l.importedFrom; }).map(function (l) { return l.id; });
+        var exist = {}; list().forEach(function (l) { if (!l.importedFrom) exist[l.borrower + '|' + l.loanDate + '|' + l.amount] = 1; });
+        var add = [], skip = 0;
+        rows.slice(start).forEach(function (row) {
+          var b = s_(row, 'borrower'), amt = num(g(row, 'amount')), ld = xDate(g(row, 'loanDate'));
+          if (!b || !amt || !ld || /합\s*계|소계|^계$/.test(b)) return;
+          if (exist[b + '|' + ld + '|' + amt]) { skip++; return; }
+          var od = xDate(g(row, 'origDue')), dd = xDate(g(row, 'dueDate')) || od, rpAmt = num(g(row, 'repaidAmt')), rpD = xDate(g(row, 'repaidDate'));
+          var stt = s_(row, 'status'), ext = num(g(row, 'extCnt')), plan = s_(row, 'plan'), reason = s_(row, 'reason') || s_(row, 'memo');
+          if (!rpAmt && /완료|상환됨/.test(stt)) rpAmt = amt;
+          var site = s_(row, 'sourceSite') || s_(row, 'useSite') || siteFromPlan(plan);
+          var due = dd || od || addDays(ld, S().termDays);
+          var l = { id: uid('ln_'), borrower: b, useSite: s_(row, 'useSite'), sourceSite: site, contractor: s_(row, 'contractor'), amount: amt, loanDate: ld,
+            origDueDate: od || due, dueDate: due, purpose: s_(row, 'purpose'),
+            memo: [plan ? '회수 계획: ' + plan : '', (!ext && !(od && dd && dd !== od) && reason) ? reason : ''].filter(Boolean).join('\n'),
+            contract: true, repayments: [], extensions: [], alarms: [], importedFrom: file.name, createdAt: new Date().toISOString(), createdBy: who() };
+          if (rpAmt) l.repayments.push({ date: rpD || due, amount: rpAmt, memo: rpD ? '관리대장' : '관리대장 (상환일 미기재)' });
+          var n = Math.max(ext, od && dd && dd !== od ? 1 : 0);
+          for (var i = 1; i <= n; i++) l.extensions.push({ date: '', from: i === 1 ? (od || '') : '', to: i === n ? dd : '', reason: i === n ? (reason || '관리대장') : '관리대장 (중간 연장일 미기재)', agreement: false, imported: true });
+          exist[b + '|' + ld + '|' + amt] = 1; add.push(l);
+        });
+        if (!add.length) { msg('가져올 건이 없습니다' + (skip ? ' (직접 등록된 건과 중복 ' + skip + '건 제외)' : '')); return; }
+        var tot = add.reduce(function (a, l) { return a + l.amount; }, 0), rep = add.reduce(function (a, l) { return a + l.repayments.reduce(function (x, r) { return x + r.amount; }, 0); }, 0);
+        var LBL = { borrower: '차용자', loanDate: '대여일', amount: '대여금액', origDue: '최초 상환일', dueDate: '만기일', extCnt: '연장횟수', repaidDate: '실제 상환일', repaidAmt: '상환금액', status: '상환상태', plan: '회수 계획(현장명)', reason: '연장사유' };
+        var got = [], miss = [];
+        Object.keys(LBL).forEach(function (k) { if (col[k] !== undefined) got.push(LBL[k]); else miss.push(LBL[k]); });
+        if (!confirm('「' + sn + '」 시트에서 ' + add.length + '건을 가져옵니다.\n· 대여 ' + won(tot) + ' / 상환 ' + won(rep) + ' / 미상환 ' + won(tot - rep)
+          + (replaced.length ? '\n· 이전에 엑셀로 가져온 ' + replaced.length + '건은 지우고 이 파일 내용으로 바꿉니다.' : '')
+          + (skip ? '\n· 직접 등록한 건과 겹치는 ' + skip + '건은 제외합니다.' : '')
+          + '\n\n[읽은 열] ' + got.join(', ') + (miss.length ? '\n[못 찾은 열] ' + miss.join(', ') : '') + '\n\n관리대장 합계와 맞으면 확인을 누르세요.')) return;
+        var up = {};
+        replaced.forEach(function (id) { delete st.loans[id]; up['loans/' + id] = null; });
+        add.forEach(function (l) { st.loans[l.id] = l; up['loans/' + l.id] = clean(l); });
+        render();
+        ref().update(up).then(function () { msg(add.length + '건을 가져왔습니다'); }).catch(fail);
+      
+} catch (err) { console.error(err); msg('엑셀을 읽지 못했습니다: ' + err.message); }
+    };
+    rd.readAsArrayBuffer(file);
+  }
+
+  function undoImport() {
+    var ids = list().filter(function (l) { return l.importedFrom; }).map(function (l) { return l.id; });
+    if (!ids.length) return;
+    if (!confirm('엑셀에서 가져온 ' + ids.length + '건을 모두 삭제합니다.\n(직접 등록한 건은 그대로 둡니다)\n가져온 건에 입력한 상환·연장·알림 기록도 함께 삭제됩니다. 계속할까요?')) return;
+    var up = {}; ids.forEach(function (id) { delete st.loans[id]; up['loans/' + id] = null; });
+    render();
+    ref().update(up).then(function () { msg(ids.length + '건을 삭제했습니다'); }).catch(fail);
+  }
+
+  /* ── 공개 ── */
+  function toggleMask(on) { st.mask = !!on; try { localStorage.setItem('ln_mask', on ? '1' : '0'); } catch (e) {} render(); }
+  function setYear(y) { st.year = y; render(); }
+  function setFilter(f) { st.filter = f; render(); }
+  var _qt = null;
+  function setQ(q, jump) {
+    st.q = q;
+    if (jump) { st.view = 'ledger'; st.filter = 'all'; render(); return; }
+    clearTimeout(_qt); _qt = setTimeout(function () {
+      var el = document.activeElement, pos = el && el.selectionStart; render();
+      var s = document.querySelector('#loansTab input[type=search]'); if (s) { s.focus(); try { s.setSelectionRange(pos, pos); } catch (e) {} }
+    }, 200);
+  }
+
+  install();
+  return { setView: setView, openForm: openForm, autoDue: autoDue, recheck: recheck, submitForm: submitForm, removeLoan: removeLoan, formToQueue: formToQueue,
+    openDetail: openDetail, delSub: delSub, openRepay: openRepay, submitRepay: submitRepay, openExtend: openExtend, exCheck: exCheck, submitExtend: submitExtend,
+    openAlarm: openAlarm, copyMsg: copyMsg, saveAlarm: saveAlarm, openQueue: openQueue, submitQueue: submitQueue, assignQueue: assignQueue, cancelQueue: cancelQueue,
+    openSettings: openSettings, submitSettings: submitSettings, resetSettings: resetSettings, exportXlsx: exportXlsx, importXlsx: importXlsx, undoImport: undoImport,
+    toggleMask: toggleMask, setYear: setYear, setFilter: setFilter, setQ: setQ, closeModal: closeModal, render: render,
+    _test: { st: st, list: list, metrics: metrics, budget: budget, todos: todos, checks: checks } };
+})();
+</script>
+<!-- ═══════════ [추가 끝] 현장운영자금 대여 관리 ═══════════ -->
+
 </body>
 </html>
