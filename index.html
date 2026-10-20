@@ -7637,13 +7637,8 @@ function renderMgrMySites() {
 
     // 소장님 1명일 때 현장 전체 노무비 자동 귀속 헬퍼
     function getEffectiveLaborCost(sm, site) {
-        const siteManagerCount = data.siteManagers.filter(x => x.siteId === site.id).length;
-        if (siteManagerCount === 1) {
-            // 담당 공종/물량이 지정돼 있으면 담당분만 (2026-10-20)
-            if ((sm.constructions || []).length) return sm.constructions.reduce((sum, c) => sum + (c.cost || 0), 0);
-            return site.totalLabor || (site.constructions || []).reduce((sum, c) => sum + (c.cost || 0), 0);
-        }
-        return sm.laborCost || 0;
+        // 소장님 화면: 담당 소장님 편집에서 입력한 공종/물량 합계만 (2026-10-20)
+        return (sm.constructions || []).reduce((sum, c) => sum + (c.cost || 0), 0);
     }
 
     function getEffectiveLaborPays(sm, site) {
@@ -7723,7 +7718,7 @@ function renderMgrMySites() {
                         <span class="badge badge-primary" style="font-size:9px;">${SITE_TYPE_NAMES[site.siteType||'consulting']}</span>
                         ${completed ? '<span class="badge badge-success" style="font-size:9px;">지급완료</span>' : ''}
                     </h4>
-                    <p>📍 ${site.contractor||'-'} | 노무비: ${formatMoney(effectiveCost)}</p>
+                    <p>📍 ${site.contractor||'-'}${(sm.constructions || []).length ? ' | 노무비: ' + formatMoney(effectiveCost) : ''}</p>
                 </div>
                 <span style="color:var(--accent); font-size:18px;">›</span>
             </div>`;
@@ -7770,31 +7765,21 @@ function renderMgrSiteInfo(site, sm) {
     const siteManagerCount = data.siteManagers.filter(x => x.siteId === site.id).length;
     
     // 소장님 1명이면 현장 전체 공종, 2명 이상이면 개별 배정 공종
-    let displayConstructions = [];
-    let displayLaborCost = sm.laborCost || 0;
-    
-    // 담당 공종/물량이 지정돼 있으면 소장님 1명이어도 그 공종만 표시 (2026-10-20)
-    const mineOnly = siteManagerCount === 1 && (sm.constructions || []).length > 0;
-    if (siteManagerCount === 1) {
-        // 소장님 1명: 현장 전체 공종/물량 표시 (담당 공종 지정 시 담당분만)
-        displayConstructions = mineOnly ? sm.constructions : (site.constructions || []);
-        displayLaborCost = mineOnly ? sm.constructions.reduce((sum, c) => sum + (c.cost || 0), 0)
-            : (site.totalLabor || (site.constructions || []).reduce((sum, c) => sum + (c.cost || 0), 0));
-    } else {
-        // 소장님 2명 이상: 개별 배정된 공종만 표시
-        displayConstructions = sm.constructions || [];
-    }
+    // 소장님 화면: 담당 소장님 편집에서 입력한 공종/물량만 표시. 입력이 없으면 노무비·공종 모두 숨김 (2026-10-20)
+    const hasAssign = (sm.constructions || []).length > 0;
+    let displayConstructions = sm.constructions || [];
+    let displayLaborCost = (sm.constructions || []).reduce((sum, c) => sum + (c.cost || 0), 0);
     // 노무비단가가 0원인 항목(다른 공종 단가에 포함해 책정한 부대시설 등)은 소장님께 노출하지 않음
     displayConstructions = displayConstructions.filter(c => (Number(c.price) || 0) > 0);
     
     return `
         <div class="card">
             <!-- 내 노무비 / 공사기간 -->
-            <div style="display:grid; grid-template-columns:1fr 1fr; gap:8px; margin-bottom:14px;">
-                <div style="padding:12px; background:linear-gradient(135deg, #fef3c7, #fde68a); border-radius:8px;">
+            <div style="display:grid; grid-template-columns:${hasAssign ? '1fr 1fr' : '1fr'}; gap:8px; margin-bottom:14px;">
+                ${hasAssign ? `<div style="padding:12px; background:linear-gradient(135deg, #fef3c7, #fde68a); border-radius:8px;">
                     <div style="color:#92400e; font-size:12px;">💰 내 노무비</div>
                     <div style="font-size:18px; font-weight:700; color:#b45309; margin-top:4px;">${formatMoney(displayLaborCost)}</div>
-                </div>
+                </div>` : ''}
                 <div style="padding:12px; background:#f0f9ff; border-radius:8px;">
                     <div style="color:var(--text-light); font-size:12px;">📅 공사기간</div>
                     <div style="font-size:13px; font-weight:600; margin-top:4px;">${site.startDate||'?'} ~ ${site.endDate||'?'}</div>
@@ -7822,24 +7807,21 @@ function renderMgrSiteInfo(site, sm) {
 
             <!-- 내 담당 공종/물량 -->
             ${displayConstructions.length ? `<div>
-                <div style="font-weight:700; color:var(--primary); margin-bottom:8px;">🔧 ${siteManagerCount === 1 && !mineOnly ? '공종별 물량' : '내 담당 공종/물량'}</div>
+                <div style="font-weight:700; color:var(--primary); margin-bottom:8px;">🔧 내 담당 공종/물량</div>
                 ${displayConstructions.map(c => `<div style="display:flex; justify-content:space-between; padding:10px; background:#f8fafc; border-radius:6px; margin-bottom:4px; gap:8px; flex-wrap:wrap;">
                     <span><b>${c.name}</b></span>
                     <span style="font-size:12px; white-space:nowrap;">${(c.qty||0).toLocaleString()}${c.unit || '㎡'} × ${(c.price||0).toLocaleString()}원 = <b>${(c.cost||0).toLocaleString()}원</b></span>
                 </div>`).join('')}
-                ${siteManagerCount === 1 && !mineOnly && (site.extraLabor || 0) > 0 ? `<div style="display:flex; justify-content:space-between; padding:10px; background:#fef3c7; border-radius:6px; margin-bottom:4px; border:1px solid #fde68a;">
+                ${false ? `<div style="display:flex; justify-content:space-between; padding:10px; background:#fef3c7; border-radius:6px; margin-bottom:4px; border:1px solid #fde68a;">
                     <span><b>추가노무비</b></span>
                     <span style="font-weight:700; color:#b45309;">${(site.extraLabor||0).toLocaleString()}원</span>
                 </div>` : ''}
-                ${mineOnly ? '' : `<div style="display:flex; justify-content:space-between; padding:12px 10px; background:var(--primary); border-radius:6px; margin-top:4px;">
+                <div style="display:flex; justify-content:space-between; padding:12px 10px; background:var(--primary); border-radius:6px; margin-top:4px;">
                     <span style="color:white; font-weight:600;">총 노무비</span>
                     <span style="color:white; font-weight:700; font-size:15px;">${displayLaborCost.toLocaleString()}원</span>
-                </div>`}
+                </div>
                 ${sm.memoLogs?.length ? `<div style="margin-top:8px;">${sm.memoLogs.map(m => `<div style="padding:6px 10px; background:#fef3c7; border-radius:2px; font-size:12px; color:#92400e; margin-bottom:3px;"><b>${m.date||''}</b> ${m.text}</div>`).join('')}</div>` : sm.memo ? `<div style="margin-top:8px; padding:10px; background:#fef3c7; border-radius:6px; font-size:12px; color:#92400e;">📝 ${sm.memo}</div>` : ''}
-            </div>` : `<div style="padding:14px; background:#fef3c7; border-radius:8px; text-align:center;">
-                <div style="color:#92400e;">📋 담당 공종이 아직 지정되지 않았습니다.</div>
-                <div style="color:var(--text-light); font-size:12px; margin-top:4px;">관리자에게 문의해주세요.</div>
-            </div>`}
+            </div>` : ''}
         </div>
     `;
 }
@@ -8137,14 +8119,15 @@ function renderMgrSitePayment(site, sm) {
     let displayLaborCost = sm.laborCost || 0;
     let laborPays;
     if (siteManagerCount === 1) {
-        // 소장님 1명: 현장 전체 노무비 & 전체 대금 항목 표시 (담당 공종 지정 시 담당분 노무비만, 2026-10-20)
-        displayLaborCost = (sm.constructions || []).length ? sm.constructions.reduce((sum, c) => sum + (c.cost || 0), 0)
-            : (site.totalLabor || (site.constructions || []).reduce((sum, c) => sum + (c.cost || 0), 0));
+        // 소장님 1명: 전체 대금 항목 표시 (노무비는 아래에서 담당 입력분으로)
         laborPays = site.laborPays || [];
     } else {
         // 소장님 2명 이상: 본인 귀속 대금만 필터
         laborPays = (site.laborPays || []).filter(p => !p.mgrId || p.mgrId === currentUser.id);
     }
+    // 소장님 화면: 총 노무비는 담당 소장님 편집 입력분 합계, 입력 없으면 노무비 현황 숨김 (2026-10-20)
+    const hasAssign = (sm.constructions || []).length > 0;
+    displayLaborCost = (sm.constructions || []).reduce((sum, c) => sum + (c.cost || 0), 0);
     const laborPaid = laborPays.filter(p => p.paidDate).reduce((s, p) => s + (p.amount || 0), 0);
     const laborRequested = laborPays.filter(p => p.issueDate && !p.paidDate).reduce((s, p) => s + (p.amount || 0), 0);
     const laborRemain = displayLaborCost - laborPaid - laborRequested;
@@ -8173,7 +8156,7 @@ function renderMgrSitePayment(site, sm) {
     return `
         <div class="card">
             <!-- 노무비 현황 요약 -->
-            <div style="background:linear-gradient(135deg, #fef3c7, #fde68a); padding:16px; border-radius:10px; margin-bottom:14px;">
+            ${hasAssign ? `<div style="background:linear-gradient(135deg, #fef3c7, #fde68a); padding:16px; border-radius:10px; margin-bottom:14px;">
                 <div style="font-weight:700; color:#92400e; margin-bottom:10px; font-size:15px;">💰 노무비 현황</div>
                 <div style="display:grid; grid-template-columns:repeat(2, 1fr); gap:8px;">
                     <div style="padding:10px 8px; background:rgba(255,255,255,0.7); border-radius:8px; text-align:center;">
@@ -8193,7 +8176,7 @@ function renderMgrSitePayment(site, sm) {
                         <div style="font-size:15px; font-weight:700; color:#dc2626; white-space:nowrap;">${formatMoney(laborRemain)}</div>
                     </div>
                 </div>
-            </div>
+            </div>` : ''}
 
             <!-- 세금계산서 발행 참고정보 (토글) -->
             ${(() => {
