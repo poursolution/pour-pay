@@ -7041,7 +7041,7 @@ function getMgrUnpaid(){
         // 내 노무비(laborPays) 중 미입금만 — 계산서 발행된 것만(미발행 제외), 컨설팅은 건드리지 않음
         const mine = (site.laborPays || [])
             .map((p, idx) => ({ p, idx }))
-            .filter(x => (!x.p.mgrId || x.p.mgrId === currentUser.id)
+            .filter(x => (x.p.mgrId && x.p.mgrId === currentUser.id)
                           && x.p.issueDate            // 계산서 발행된 건만 (미발행 = 아직 청구 전이라 제외)
                           && !x.p.paidDate && (x.p.amount || 0) > 0);
         if(!mine.length) return;
@@ -7171,7 +7171,7 @@ function getMgrSales(year){
         const site = data.sites.find(s => s.id === sm.siteId);
         if(!site) return;
         (site.laborPays || []).forEach(p => {
-            if(p.mgrId && p.mgrId !== currentUser.id) return;   // 내 노무비만(컨설팅 제외)
+            if(!p.mgrId || p.mgrId !== currentUser.id) return;   // 소장님 선택된 대금만 (2026-10-26)   // 내 노무비만(컨설팅 제외)
             const amt = p.amount || 0;
             if(!amt || !p.issueDate) return;                    // 계산서 발행분만 매출 인식
             const iss = ym(p.issueDate);
@@ -7643,10 +7643,8 @@ function renderMgrMySites() {
 
     function getEffectiveLaborPays(sm, site) {
         const siteManagerCount = data.siteManagers.filter(x => x.siteId === site.id).length;
-        if (siteManagerCount === 1) {
-            return site.laborPays || [];
-        }
-        return (site.laborPays || []).filter(p => !p.mgrId || p.mgrId === sm.mgrId);
+        // 소장님을 선택한 대금만 (2026-10-26)
+        return (site.laborPays || []).filter(p => p.mgrId && p.mgrId === sm.mgrId);
     }
 
     // 대금 지급 완료 여부 체크 함수
@@ -8120,10 +8118,10 @@ function renderMgrSitePayment(site, sm) {
     let laborPays;
     if (siteManagerCount === 1) {
         // 소장님 1명: 전체 대금 항목 표시 (노무비는 아래에서 담당 입력분으로)
-        laborPays = site.laborPays || [];
+        laborPays = (site.laborPays || []).filter(p => p.mgrId && p.mgrId === currentUser.id);   // 소장님 선택된 대금만 (2026-10-26)
     } else {
         // 소장님 2명 이상: 본인 귀속 대금만 필터
-        laborPays = (site.laborPays || []).filter(p => !p.mgrId || p.mgrId === currentUser.id);
+        laborPays = (site.laborPays || []).filter(p => p.mgrId && p.mgrId === currentUser.id);   // 소장님 선택된 대금만 (2026-10-26)
     }
     // 소장님 화면: 총 노무비는 담당 소장님 편집 입력분 합계, 입력 없으면 노무비 현황 숨김 (2026-10-20)
     const hasAssign = (sm.constructions || []).length > 0;
