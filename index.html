@@ -3797,16 +3797,16 @@ function renderLaborTab(siteId, assigns, workers) {
         const tm = resolveTeamMember(w);
         const wage = w.wage || tm?.wage || 200000;
         const att = monthAtt[w.id] || {};
-        const gongsu = Object.values(att).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+        const gongsu = Math.round((Object.values(att).reduce((s, v) => s + (parseFloat(v) || 0), 0)) * 100) / 100;
         const ilsu = Object.values(att).filter(v => parseFloat(v) > 0).length;
         const monthIncome = gongsu * wage;
-        const sum1 = days1.reduce((s, d) => s + (parseFloat(att[d]) || 0), 0);
+        const sum1 = Math.round((days1.reduce((s, d) => s + (parseFloat(att[d]) || 0), 0)) * 100) / 100;
         const hitFirstDay = parseFloat(att['1']) > 0;  // 1일 근무 시 무조건 대상
         const hitDays = ilsu >= insThresholdDays;
         const hitIncome = insThresholdIncomeEnabled && monthIncome >= insThresholdIncome;
         const insFlag = hitFirstDay || hitDays || hitIncome;
         if (insFlag) adminInsCount++;
-        totalGongsu += gongsu; totalIlsu += ilsu; totalAmount += monthIncome;
+        totalGongsu = Math.round((totalGongsu + gongsu) * 100) / 100; totalIlsu += ilsu; totalAmount += monthIncome;
         return { w, tm, wage, att, gongsu, ilsu, monthIncome, sum1, insFlag, hitFirstDay, hitDays, hitIncome };
     });
 
@@ -6692,10 +6692,10 @@ async function downloadAttendanceExcel(siteId) {
         const tm = resolveTeamMember(w);
         const wage = w.wage || tm?.wage || 200000;
         const att = monthAtt[w.id] || {};
-        const gongsu = Object.values(att).reduce((sum, v) => sum + (parseFloat(v) || 0), 0);
+        const gongsu = Math.round((Object.values(att).reduce((sum, v) => sum + (parseFloat(v) || 0), 0)) * 100) / 100;
         const ilsu = Object.values(att).filter(v => parseFloat(v) > 0).length;
         const amount = gongsu * wage;
-        totalGongsu += gongsu; totalIlsu += ilsu; totalAmount += amount;
+        totalGongsu = Math.round((totalGongsu + gongsu) * 100) / 100; totalIlsu += ilsu; totalAmount += amount;
 
         const row = h2Row + 1 + idx;
         ws.getRow(row).height = 22;
@@ -7981,10 +7981,10 @@ function renderMgrSiteAttendance(site, sm) {
         const tm = resolveTeamMember(w);
         const wage = w.wage || tm?.wage || 200000;
         const att = monthAtt[w.id] || {};
-        const gongsu = Object.values(att).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+        const gongsu = Math.round((Object.values(att).reduce((s, v) => s + (parseFloat(v) || 0), 0)) * 100) / 100;
         const ilsu = Object.values(att).filter(v => parseFloat(v) > 0).length;
         const monthIncome = gongsu * wage;
-        const sum1 = days1.reduce((s, d) => s + (parseFloat(att[d]) || 0), 0);
+        const sum1 = Math.round((days1.reduce((s, d) => s + (parseFloat(att[d]) || 0), 0)) * 100) / 100;
 
         const hitFirstDay = parseFloat(att['1']) > 0;  // 1일 근무 시 무조건 대상
         const hitDays = ilsu >= insThresholdDays;
@@ -7992,7 +7992,7 @@ function renderMgrSiteAttendance(site, sm) {
         const insFlag = hitFirstDay || hitDays || hitIncome;
         if (insFlag) insCount++;
 
-        totalGongsu += gongsu; totalIlsu += ilsu; totalAmount += monthIncome;
+        totalGongsu = Math.round((totalGongsu + gongsu) * 100) / 100; totalIlsu += ilsu; totalAmount += monthIncome;
         return { w, tm, wage, att, gongsu, ilsu, monthIncome, sum1, insFlag, hitFirstDay, hitDays, hitIncome };
     });
 
@@ -8313,12 +8313,12 @@ function refreshAttendanceTotals(siteId) {
         const att = monthAtt[w.id] || {};
 
         // 1~15일 소계
-        const sum1 = days1.reduce((s, d) => s + (parseFloat(att[d]) || 0), 0);
+        const sum1 = Math.round((days1.reduce((s, d) => s + (parseFloat(att[d]) || 0), 0)) * 100) / 100;
         const sub1El = document.querySelector('[data-sub1="'+w.id+'"]');
         if (sub1El) sub1El.textContent = sum1 || '-';
 
         // 전체 공수/일수/금액
-        const gongsu = Object.values(att).reduce((s, v) => s + (parseFloat(v) || 0), 0);
+        const gongsu = Math.round((Object.values(att).reduce((s, v) => s + (parseFloat(v) || 0), 0)) * 100) / 100;
         const ilsu = Object.values(att).filter(v => parseFloat(v) > 0).length;
         const amount = gongsu * wage;
 
@@ -8349,7 +8349,7 @@ function refreshAttendanceTotals(siteId) {
             }
         }
 
-        totalGongsu += gongsu;
+        totalGongsu = Math.round((totalGongsu + gongsu) * 100) / 100;
         totalIlsu += ilsu;
         totalAmount += amount;
     });
