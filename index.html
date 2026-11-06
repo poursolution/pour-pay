@@ -1037,11 +1037,11 @@ let currentSiteTab = 'info'; // 현재 탭 상태 유지
 let attendanceYear = new Date().getFullYear();
 let attendanceMonth = new Date().getMonth() + 1;
 
-/* 노임신고 수정 잠금: N월 데이터는 N+1월 5일까지만 수정 가능 */
+/* 노임신고 수정 잠금: N월 데이터는 N+1월 9일까지만 수정 가능 (2026-11-06 5일→9일) */
 function isAttendanceLocked(year, month) {
     const now = new Date();
-    // 마감일: 해당월 다음달 5일 23:59:59
-    const deadline = new Date(year, month, 5, 23, 59, 59); // month는 0-based가 아닌 실제 월이므로 그대로 넣으면 다음달
+    // 마감일: 해당월 다음달 9일 23:59:59
+    const deadline = new Date(year, month, 9, 23, 59, 59); // month는 0-based가 아닌 실제 월이므로 그대로 넣으면 다음달
     return now > deadline;
 }
 
@@ -3832,7 +3832,7 @@ function renderLaborTab(siteId, assigns, workers) {
             
             ${locked ? `<div style="padding:12px 14px; background:#FEF2F2; border:1px solid #FECACA; border-left:4px solid #EF4444; border-radius:2px; margin-bottom:10px;">
                 <div style="font-size:13px; font-weight:700; color:#DC2626;">🔒 수정 마감</div>
-                <div style="font-size:12px; color:#92400E; margin-top:2px;">${month}월 노임신고는 ${deadlineYear}년 ${deadlineMonth}월 5일에 마감되었습니다. 수정이 불가합니다.</div>
+                <div style="font-size:12px; color:#92400E; margin-top:2px;">${month}월 노임신고는 ${deadlineYear}년 ${deadlineMonth}월 9일에 마감되었습니다. 수정이 불가합니다.</div>
             </div>` : ''}
 
             <div style="display:flex; gap:6px; flex-wrap:wrap; margin-bottom:10px;">
@@ -8019,7 +8019,7 @@ function renderMgrSiteAttendance(site, sm) {
 
             ${locked ? `<div style="padding:12px 14px; background:#FEF2F2; border:1px solid #FECACA; border-left:4px solid #EF4444; border-radius:2px; margin-bottom:10px;">
                 <div style="font-size:13px; font-weight:700; color:#DC2626;">🔒 수정 마감</div>
-                <div style="font-size:12px; color:#92400E; margin-top:2px;">${month}월 노임신고는 ${deadlineYear}년 ${deadlineMonth}월 5일에 마감되었습니다. 수정이 불가합니다.</div>
+                <div style="font-size:12px; color:#92400E; margin-top:2px;">${month}월 노임신고는 ${deadlineYear}년 ${deadlineMonth}월 9일에 마감되었습니다. 수정이 불가합니다.</div>
             </div>` : ''}
 
             <!-- 4대보험 기준 설정 -->
