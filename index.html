@@ -8696,7 +8696,7 @@ var LN = (function () {
     extendNoticeDays: 3,                 // 연장 신청 기한 (상환일 n일 전)
     repayAccount: '기업은행 468-084895-04-017 (예금주 주식회사 넷폼)'
   };
-  var st = { loans: {}, queue: {}, settings: Object.assign({}, DEFAULTS), loaded: false, listening: false,
+  var st = { loans: {}, queue: {}, requests: {}, settings: Object.assign({}, DEFAULTS), loaded: false, listening: false,
              view: 'summary', year: String(new Date().getFullYear()), filter: 'active', q: '', mask: false, error: '' };
   try { st.mask = localStorage.getItem('ln_mask') === '1'; } catch (e) {}
 
@@ -8871,9 +8871,9 @@ var LN = (function () {
     st.listening = true;
     ref().on('value', function (snap) {
       var v = snap.val() || {};
-      st.loans = v.loans || {}; st.queue = v.queue || {};
+      st.loans = v.loans || {}; st.queue = v.queue || {}; st.requests = v.requests || {};
       st.settings = Object.assign({}, DEFAULTS, v.settings || {});
-      st.loaded = true; st.error = ''; render(); mgrInject();
+      st.loaded = true; st.error = ''; render(); mgrInject(); updateReqAlarm();
     }, function (e) { st.listening = false; st.loaded = true; fail(e); });
   }
 
@@ -8884,7 +8884,6 @@ var LN = (function () {
     var u = me(), tabs = document.getElementById('mgrViewTabs'); if (!u || !tabs) return;
     var mine = myLoans(), cur = (typeof mgrViewTab !== 'undefined') ? mgrViewTab : '';
     var btn = document.getElementById('mgrLoanTabBtn');
-    if (!mine.length && cur !== 'myloan') { if (btn) btn.remove(); return; }
     var open = mine.filter(function (l) { return l.balance > 0; }), late = open.filter(isLate).length;
     var badge = late ? ' <span class="badge badge-danger" style="margin-left:4px;">' + late + '</span>' : open.length ? ' <span class="badge badge-warning" style="margin-left:4px;">' + open.length + '</span>' : '';
     if (!btn) {
@@ -8894,7 +8893,7 @@ var LN = (function () {
     }
     btn.innerHTML = '내차용' + badge;
     btn.classList.toggle('active', cur === 'myloan');
-    if (cur === 'myloan') { var c = document.getElementById('mgrViewTabContent'); if (c) c.innerHTML = vMine(mine); }
+    if (cur === 'myloan') { var c = document.getElementById('mgrViewTabContent'); if (c) { var keep = grabReqForm(); c.innerHTML = vMine(mine); putReqForm(keep); } }
   }
   function vMine(mine) {
     if (!st.loaded) return '<div class="card" style="text-align:center;padding:24px;color:var(--text-light);">불러오는 중…</div>';
@@ -8919,6 +8918,7 @@ var LN = (function () {
       + box('남은 상환금액', won(rest), open.length + '건', rest ? '#b45309' : '')
       + box('다음 상환일', next ? fmtD(next.dueDate) : '-', next ? won(next.balance) + ' · ' + dd(next) : '상환할 차용금 없음', next && isLate(next) ? 'var(--danger)' : '')
       + box('지금까지 차용 / 상환', won(tot), '상환 ' + won(paid)) + '</div>';
+    h += vReqMgr(me());   // 차용 신청 (2026-11-07)
 
     // 1) 앞으로 상환할 차용금
     h += '<div class="card"><div class="card-header"><div class="card-title">앞으로 상환할 차용금</div></div>';
@@ -8965,6 +8965,7 @@ var LN = (function () {
     var orig = showTab;
     var wrapped = function (tab) {
       var btn = document.getElementById('loansTabBtn'), pane = document.getElementById('loansTab');
+      if (allowed()) listen();   // 관리자: 어느 탭에 있어도 차용 신청 알람 받기 (2026-11-07)
       if (btn) btn.classList.toggle('hidden', !allowed());
       if (tab === 'loans') {
         if (!allowed()) { tab = 'dashboard'; }
@@ -8972,13 +8973,13 @@ var LN = (function () {
           orig('__none__');                       // 기존 탭 모두 숨김 (기존 로직 그대로)
           pane.classList.remove('hidden');
           document.querySelectorAll('#mainTabs .tab').forEach(function (el) { el.classList.toggle('active', el === btn); });
-          listen(); render();
+          listen(); render(); updateReqAlarm();
           return;
         }
       }
       if (pane) pane.classList.add('hidden');
       if (btn) btn.classList.remove('active');
-      return orig(tab);
+      var out = orig(tab); try { updateReqAlarm(); } catch (e) {} return out;
     };
     wrapped._ln = true;
     showTab = wrapped;
@@ -9003,7 +9004,7 @@ var LN = (function () {
     if (!root || document.getElementById('loansTab').classList.contains('hidden')) return;
     _nm = nameMap();
     fillLists();
-    var views = [['summary', '현황'], ['todo', '알림·할 일'], ['ledger', '대여 원장'], ['people', '인별 집계'], ['queue', '대기 등록'], ['rules', '제도 기준']];
+    var views = [['summary', '현황'], ['requests', '차용 신청'], ['todo', '알림·할 일'], ['ledger', '대여 원장'], ['people', '인별 집계'], ['queue', '대기 등록'], ['rules', '제도 기준']];
     var td = st.loaded ? todos() : { due: [] };
     var h = '<div class="ln-head"><div><h2>현장운영자금 대여 관리</h2><p>「현장 운영자금 대여제도 도입방안」(수정 17차) 기준 · 시행일 ' + fmtD(S().startDate) + '</p></div>'
       + '<div style="display:flex;gap:6px;flex-wrap:wrap;">'
@@ -9013,11 +9014,13 @@ var LN = (function () {
         var badge = v[0] === 'todo' && td.due.length ? ' <span class="badge badge-danger" style="margin-left:2px;padding:1px 5px;">' + td.due.length + '</span>' : '';
         var qn = v[0] === 'queue' ? qList().filter(function (q) { return q.status === '대기'; }).length : 0;
         if (qn) badge = ' <span class="badge badge-warning" style="margin-left:2px;padding:1px 5px;">' + qn + '</span>';
+        var rn = v[0] === 'requests' ? rPending().length : 0;
+        if (rn) badge = ' <span class="badge badge-danger" style="margin-left:2px;padding:1px 5px;">' + rn + '</span>';
         return '<button class="' + (st.view === v[0] ? 'on' : '') + '" onclick="LN.setView(\'' + v[0] + '\')">' + v[1] + badge + '</button>';
       }).join('') + '</div>';
     if (st.error) h += '<div class="ln-alert bad">' + esc(st.error) + '</div>';
     if (!st.loaded) { root.innerHTML = h + '<div class="card ln-empty">불러오는 중…</div>'; return; }
-    var body = { summary: vSummary, todo: vTodo, ledger: vLedger, people: vPeople, queue: vQueue, rules: vRules }[st.view] || vSummary;
+    var body = { summary: vSummary, requests: vRequests, todo: vTodo, ledger: vLedger, people: vPeople, queue: vQueue, rules: vRules }[st.view] || vSummary;
     root.innerHTML = h + body();
     renderSelBar();
   }
@@ -9270,9 +9273,9 @@ var LN = (function () {
   function money(id, v) { return inp(id, v ? Number(v).toLocaleString() : '', 'inputmode="numeric" oninput="formatCurrency(this);LN.recheck()"'); }
 
   /* ── 대여 등록/수정 ── */
-  var _editId = null, _fromQueue = null;
+  var _editId = null, _fromQueue = null, _fromReq = null;
   function openForm(id, preset) {
-    _editId = id || null; _fromQueue = (preset && preset.queueId) || null;
+    _editId = id || null; _fromQueue = (preset && preset.queueId) || null; _fromReq = (preset && preset.reqId) || null;
     var l = id ? norm(st.loans[id]) : Object.assign({ loanDate: today(), contract: true }, preset || {});
     var b = '<div class="grid-2">'
       + fg('차용자(소장) *', inp('lnBorrower', l.borrower, 'list="lnBorrowerList" autocomplete="off" oninput="LN.recheck()" onchange="LN.fillBorrower()"'), '소장님 탭에 등록된 이름이 자동완성됩니다')
@@ -9387,6 +9390,7 @@ var LN = (function () {
     saveLoan(l).then(function (ok) {
       if (!ok) return;
       if (_fromQueue && st.queue[_fromQueue]) saveQueue(Object.assign({}, st.queue[_fromQueue], { status: '배정', doneDate: today(), loanId: l.id }));
+      if (_fromReq && st.requests[_fromReq] && !_editId) { saveReq(Object.assign({}, st.requests[_fromReq], { status: '승인', decidedAt: new Date().toISOString(), decidedBy: who(), loanId: l.id })); _fromReq = null; }
       var wasNew = !_editId; msg(wasNew ? '대여 건을 등록했습니다 — 아래에서 잔디 보고·기안을 만들 수 있습니다' : '수정했습니다'); if (wasNew) openDetail(l.id); else closeModal();
     });
   }
@@ -10067,6 +10071,197 @@ var LN = (function () {
     }, 200);
   }
 
+  /* ══════════ 차용 신청 (소장님 → 관리자) 2026-11-07 ══════════ */
+  var REQ_ST = { '대기': ['검토 중', '#92400e', '#fef3c7'], '승인': ['승인 · 대여 등록됨', '#065f46', '#d1fae5'], '반려': ['반려', '#991b1b', '#fee2e2'], '취소': ['신청 취소', '#555', '#eee'] };
+  var PLAN_OPTS = ['준공잔금 수령 직후', '중도금 수령 직후'];
+  function rList() { return Object.keys(st.requests || {}).map(function (k) { return st.requests[k]; }).filter(function (r) { return r && r.id; }); }
+  function rPending() { return rList().filter(function (r) { return r.status === '대기'; }).sort(function (a, b) { return (a.createdAt || '').localeCompare(b.createdAt || ''); }); }
+  function rBadge(r) { var s = REQ_ST[r.status] || [r.status, '#555', '#eee']; return '<span style="display:inline-block;font-size:11px;font-weight:700;color:' + s[1] + ';background:' + s[2] + ';border-radius:999px;padding:3px 10px;white-space:nowrap;">' + s[0] + '</span>'; }
+  function fmtDT(iso) { if (!iso) return '-'; var d = new Date(iso); return d.getFullYear() + '.' + pad(d.getMonth() + 1) + '.' + pad(d.getDate()) + ' ' + pad(d.getHours()) + ':' + pad(d.getMinutes()); }
+  function saveReq(r) { st.requests[r.id] = r; render(); mgrInject(); updateReqAlarm(); return ref('requests/' + r.id).set(clean(r)).then(function () { return true; }).catch(fail); }
+  function mySites(u) {
+    try {
+      var ids = {}; (data.siteManagers || []).forEach(function (sm) { if (sm && sm.mgrId === u.id) ids[sm.siteId] = 1; });
+      return (data.sites || []).filter(function (s) { return s && ids[s.id]; }).sort(function (a, b) { return String(a.name || '').localeCompare(String(b.name || '')); });
+    } catch (e) { return []; }
+  }
+
+  // ── 소장님 화면: 신청서 + 내 신청 내역 ──
+  function vReqMgr(u) {
+    var mine = rList().filter(function (r) { return r.mgrId === u.id; }).sort(function (a, b) { return (b.createdAt || '').localeCompare(a.createdAt || ''); });
+    var h = '';
+    var pend = mine.filter(function (r) { return r.status === '대기'; });
+    if (pend.length) h += pend.map(reqStatusCard).join('');
+    // 신청서
+    var sites = mySites(u), m = (data.managers || []).filter(function (x) { return x && x.id === u.id; })[0] || u;
+    var acct = [m.bizBank, m.bizAccount, m.bizAccountName ? '(예금주 ' + m.bizAccountName + ')' : ''].filter(Boolean).join(' ');
+    var fs = 'style="width:100%;height:44px;border:1px solid var(--border);border-radius:6px;padding:0 10px;font-size:14px;font-family:inherit;box-sizing:border-box;background:#fff;"';
+    var lb = 'style="display:block;font-size:13px;font-weight:600;margin:12px 0 6px;"';
+    h += '<div class="card" id="lnReqFormCard"><div class="card-header"><div class="card-title">차용 신청</div></div>'
+      + '<div style="font-size:12px;color:var(--text-light);margin-top:-4px;">신청하시면 대금관리 담당자에게 바로 알림이 갑니다.</div>'
+      + '<label ' + lb + ' for="lnRqSite">현장</label>'
+      + (sites.length
+        ? '<select id="lnRqSite" ' + fs + ' onchange="LN.reqSiteInfo()"><option value="">현장을 선택하세요</option>' + sites.map(function (s) { return '<option value="' + esc(s.id) + '">' + esc(s.name) + (s.contractor ? ' (' + esc(s.contractor) + ')' : '') + '</option>'; }).join('') + '</select>'
+        : '<input id="lnRqSiteText" ' + fs + ' placeholder="현장명을 입력하세요">')
+      + '<div id="lnRqSiteInfo" style="display:flex;gap:6px;flex-wrap:wrap;margin-top:6px;"></div>'
+      + '<label ' + lb + ' for="lnRqAmt">요청 금액</label>'
+      + '<div style="display:flex;align-items:center;gap:6px;"><input id="lnRqAmt" inputmode="numeric" oninput="formatCurrency(this)" placeholder="0" ' + fs.replace('padding:0 10px;', 'padding:0 10px;font-weight:700;font-size:16px;') + '><span style="color:var(--text-light);">원</span></div>'
+      + '<label ' + lb + ' for="lnRqWish">입금 희망일</label>'
+      + '<input id="lnRqWish" type="date" ' + fs + '>'
+      + '<label ' + lb + ' for="lnRqReason">요청 사유</label>'
+      + '<textarea id="lnRqReason" rows="3" placeholder="ex) 중도금 수령이 이번달 말로 그 전 운영자금이 필요하여 차용요청" style="width:100%;border:1px solid var(--border);border-radius:6px;padding:10px;font-size:14px;font-family:inherit;box-sizing:border-box;resize:vertical;"></textarea>'
+      + '<label ' + lb + ' for="lnRqPlan">상환 계획</label>'
+      + '<select id="lnRqPlan" ' + fs + ' onchange="LN.reqPlanToggle()">' + PLAN_OPTS.map(function (p) { return '<option>' + p + '</option>'; }).join('') + '<option value="__etc">기타 (직접 입력)</option></select>'
+      + '<input id="lnRqPlanEtc" ' + fs.replace('style="', 'style="display:none;margin-top:6px;') + ' placeholder="상환 계획을 적어주세요">'
+      + '<label ' + lb + ' for="lnRqAcct">받으실 계좌</label>'
+      + '<input id="lnRqAcct" ' + fs + ' value="' + esc(acct) + '" placeholder="은행 계좌번호 (예금주)">'
+      + (acct ? '<div style="font-size:11px;color:var(--text-light);margin-top:4px;">내정보에 등록된 계좌가 미리 채워집니다.</div>' : '')
+      + '<button type="button" class="btn btn-primary" style="width:100%;height:50px;margin-top:16px;font-size:15px;font-weight:700;" onclick="LN.submitReq()">차용 신청하기</button>'
+      + '</div>';
+    // 지난 신청
+    var past = mine.filter(function (r) { return r.status !== '대기'; }).slice(0, 10);
+    if (past.length) {
+      h += '<div class="card"><div class="card-header"><div class="card-title">지난 신청 내역</div></div>'
+        + past.map(function (r) {
+          return '<div style="display:flex;justify-content:space-between;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #f0ede9;font-size:13px;flex-wrap:wrap;">'
+            + '<div><b>' + esc(r.siteName || '-') + '</b> · ' + won(r.amount) + '<div style="font-size:11px;color:var(--text-light);">' + fmtDT(r.createdAt) + (r.status === '반려' && r.rejectReason ? ' · 사유: ' + esc(r.rejectReason) : '') + '</div></div>' + rBadge(r) + '</div>';
+        }).join('') + '</div>';
+    }
+    return h;
+  }
+  function reqStatusCard(r) {
+    var dot = function (state) {
+      return state === 'done' ? '<span style="width:12px;height:12px;border-radius:50%;background:var(--primary);display:inline-block;"></span>'
+        : state === 'now' ? '<span style="width:12px;height:12px;border-radius:50%;background:#e0b04f;box-shadow:0 0 0 4px #fef3c7;display:inline-block;"></span>'
+        : '<span style="width:12px;height:12px;border-radius:50%;border:2px solid #c4c4bd;box-sizing:border-box;display:inline-block;"></span>';
+    };
+    var step = function (state, label) { return '<div style="display:flex;gap:10px;align-items:center;padding:5px 0;font-size:13px;' + (state === 'todo' ? 'color:var(--text-light);' : '') + '">' + dot(state) + '<span>' + label + '</span></div>'; };
+    var row = function (k, v) { return '<div style="display:flex;gap:10px;font-size:13px;padding:3px 0;"><span style="width:84px;color:var(--text-light);flex-shrink:0;">' + k + '</span><span>' + v + '</span></div>'; };
+    return '<div class="card" style="border:1px solid #a7f3d0;">'
+      + '<div style="background:#ecfdf5;border-radius:6px;padding:12px;margin-bottom:12px;color:#065f46;"><b>신청이 접수됐습니다</b><div style="font-size:12px;margin-top:3px;">담당자가 확인 후 대표님 승인을 받아 연락드립니다.</div></div>'
+      + '<div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px;"><b style="font-size:15px;">내 신청 내역</b>' + rBadge(r) + '</div>'
+      + row('현장', esc(r.siteName || '-')) + row('요청 금액', '<b>' + won(r.amount) + '</b>') + row('입금 희망일', esc(fmtDW(r.wishDate) || '-')) + row('신청일', fmtDT(r.createdAt))
+      + '<div style="border-top:1px solid #f0ede9;margin-top:10px;padding-top:10px;"><div style="font-size:13px;font-weight:700;margin-bottom:4px;">진행 단계</div>'
+      + step('done', '신청 완료') + step('now', '담당자 확인 · 대표님 보고') + step('todo', '차용증서 서명 (모두싸인)') + step('todo', '입금 완료') + '</div>'
+      + '<button type="button" class="btn btn-outline" style="width:100%;height:44px;margin-top:10px;" onclick="LN.cancelReq(\'' + esc(r.id) + '\')">신청 취소</button></div>';
+  }
+  function reqSiteInfo() {
+    var el = document.getElementById('lnRqSite'), box = document.getElementById('lnRqSiteInfo'); if (!el || !box) return;
+    var s = (data.sites || []).filter(function (x) { return x && x.id === el.value; })[0];
+    var chip = function (t) { return '<span style="font-size:12px;background:#f4f4f1;border-radius:6px;padding:4px 8px;color:#404040;">' + esc(t) + '</span>'; };
+    box.innerHTML = s ? (s.contractor ? chip('시공사 ' + s.contractor) : '') + (s.progress ? chip('공정률 ' + s.progress + '%') : '') : '';
+  }
+  function reqPlanToggle() { var p = document.getElementById('lnRqPlan'), e = document.getElementById('lnRqPlanEtc'); if (p && e) e.style.display = p.value === '__etc' ? '' : 'none'; }
+  function submitReq() {
+    var u = me(); if (!u) return;
+    var sel = document.getElementById('lnRqSite'), s = sel ? (data.sites || []).filter(function (x) { return x && x.id === sel.value; })[0] : null;
+    var siteName = s ? s.name : val('lnRqSiteText');
+    var plan = val('lnRqPlan') === '__etc' ? String(val('lnRqPlanEtc') || '').trim() : val('lnRqPlan');
+    var r = { id: uid('rq_'), mgrId: u.id, mgrName: u.name || '', siteId: s ? s.id : '', siteName: String(siteName || '').trim(),
+      contractor: s && s.contractor || '', progress: s && s.progress ? Number(s.progress) : null,
+      amount: num(val('lnRqAmt')), wishDate: val('lnRqWish'), reason: String(val('lnRqReason') || '').trim(), plan: plan, account: String(val('lnRqAcct') || '').trim(),
+      status: '대기', createdAt: new Date().toISOString() };
+    if (!r.siteName) { msg('현장을 선택하세요'); return; }
+    if (!r.amount) { msg('요청 금액을 입력하세요'); return; }
+    if (!validDate(r.wishDate)) { msg('입금 희망일을 선택하세요'); return; }
+    if (!r.reason) { msg('요청 사유를 적어주세요'); return; }
+    if (!r.plan) { msg('상환 계획을 적어주세요'); return; }
+    if (!confirm(r.siteName + '\n' + won(r.amount) + ' 차용 신청할까요?')) return;
+    saveReq(r).then(function (ok) { if (ok) { msg('차용 신청이 접수됐습니다'); window.scrollTo(0, 0); } else { delete st.requests[r.id]; mgrInject(); msg('⚠️ 신청이 저장되지 않았습니다. 담당자에게 연락해 주세요.'); } });
+  }
+  function cancelReq(id) {
+    var r = st.requests[id], u = me(); if (!r || r.status !== '대기') return;
+    if (u && r.mgrId !== u.id) return;
+    if (!confirm('차용 신청을 취소할까요?')) return;
+    saveReq(Object.assign({}, r, { status: '취소', decidedAt: new Date().toISOString(), decidedBy: who() }));
+  }
+  // 입력 중이던 신청서 내용 유지 (데이터가 바뀌어 화면이 다시 그려질 때)
+  var RQ_FIELDS = ['lnRqSite', 'lnRqSiteText', 'lnRqAmt', 'lnRqWish', 'lnRqReason', 'lnRqPlan', 'lnRqPlanEtc', 'lnRqAcct'];
+  function grabReqForm() { var o = null; RQ_FIELDS.forEach(function (id) { var el = document.getElementById(id); if (el) { o = o || {}; o[id] = el.value; } }); return o; }
+  function putReqForm(o) { if (!o) return; RQ_FIELDS.forEach(function (id) { var el = document.getElementById(id); if (el && o[id] !== undefined) el.value = o[id]; }); reqSiteInfo(); reqPlanToggle(); }
+
+  // ── 관리자 화면: 신청 목록 ──
+  function vRequests() {
+    var pend = rPending(), done = rList().filter(function (r) { return r.status !== '대기'; }).sort(function (a, b) { return (b.decidedAt || b.createdAt || '').localeCompare(a.decidedAt || a.createdAt || ''); });
+    markReqSeen();
+    var h = '';
+    var cell = function (k, v) { return '<div style="background:#f7f7f4;border-radius:6px;padding:10px 12px;"><div style="font-size:11px;color:var(--text-light);">' + k + '</div><div style="margin-top:2px;font-weight:600;line-height:1.5;">' + v + '</div></div>'; };
+    h += pend.length ? pend.map(function (r) {
+      var prev = list().filter(function (l) { return (l.managerId && l.managerId === r.mgrId) || key(l.borrower) === key(r.mgrName); });
+      var bal = prev.reduce(function (a, l) { return a + (l.balance > 0 ? l.balance : 0); }, 0), late = prev.filter(function (l) { return l.balance > 0 && isLate(l); }).length;
+      return '<div class="card"><div class="card-header" style="flex-wrap:wrap;gap:8px;"><div><div class="card-title">' + esc(r.mgrName) + ' 소장 · 차용 신청</div><div class="ln-note">' + fmtDT(r.createdAt) + ' 소장님이 직접 신청</div></div>' + rBadge(r) + '</div>'
+        + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:8px;">'
+        + cell('현장명', esc(r.siteName || '-')) + cell('업체명 · 공정률', esc(r.contractor || '-') + (r.progress ? ' · ' + r.progress + '%' : ''))
+        + cell('요청 금액', '<span style="font-size:16px;">' + won(r.amount) + '</span>') + cell('입금 희망일', esc(fmtDW(r.wishDate) || '-'))
+        + cell('요청 사유', esc(r.reason || '-')) + cell('상환 계획 · 계좌', esc(r.plan || '-') + '<br>' + esc(r.account || '-'))
+        + '</div>'
+        + '<div style="margin:10px 0;font-size:12px;color:var(--text-light);">이 소장님 남은 차용금 <b style="color:var(--text);">' + won(bal) + '</b> · 상환일 지난 건 <b style="color:' + (late ? 'var(--danger)' : 'var(--text)') + ';">' + late + '건</b></div>'
+        + '<div style="display:flex;gap:6px;flex-wrap:wrap;">'
+        + '<button class="btn btn-primary btn-sm" onclick="LN.reqReport(\'' + esc(r.id) + '\')">잔디 보고문 만들기</button>'
+        + '<button class="btn btn-outline btn-sm" onclick="LN.approveReq(\'' + esc(r.id) + '\')">승인 → 대여 등록</button>'
+        + '<button class="btn btn-outline btn-sm" style="color:var(--danger);" onclick="LN.rejectReq(\'' + esc(r.id) + '\')">반려</button></div></div>';
+    }).join('') : '<div class="card ln-empty">새로 들어온 차용 신청이 없습니다.<br><span class="ln-note">소장님이 로그인 화면의 「내차용」 탭에서 신청하면 여기에 바로 뜹니다.</span></div>';
+    if (done.length) {
+      h += '<div class="card"><div class="card-header"><div class="card-title">처리한 신청</div></div><div class="ln-tablewrap"><table class="ln-t"><thead><tr><th>신청일</th><th>소장</th><th>현장</th><th class="n">금액</th><th>결과</th><th>처리일 · 메모</th></tr></thead><tbody>'
+        + done.slice(0, 50).map(function (r) {
+          return '<tr><td>' + fmtDT(r.createdAt) + '</td><td>' + esc(r.mgrName) + '</td><td>' + esc(r.siteName || '-') + '</td><td class="n">' + won(r.amount) + '</td><td>' + rBadge(r) + '</td><td class="ln-note">' + fmtDT(r.decidedAt) + (r.rejectReason ? ' · ' + esc(r.rejectReason) : '') + (r.loanId && st.loans[r.loanId] ? ' · <a href="#" onclick="LN.openDetail(\'' + esc(r.loanId) + '\');return false;">대여 건 보기</a>' : '') + '</td></tr>';
+        }).join('') + '</tbody></table></div></div>';
+    }
+    return h;
+  }
+  function reqReport(id) {
+    var r = st.requests[id]; if (!r) return;
+    var t = '안녕하세요 대표님,\n차용 요청 건 보고드립니다.\n\n[차용대금 요청 내용]\n\n1. 차용대금 요청\n\n'
+      + '1. 현장명 : ' + (r.siteName || '') + '\n'
+      + '2. 업체명 : ' + (r.contractor || '') + '\n'
+      + '3. 공사 진행률 : ' + (r.progress ? '공정률 ' + r.progress + '%' : '') + '\n'
+      + '4. 요청자 : ' + (r.mgrName || '') + ' 소장\n'
+      + '5. 요청 금액 : ' + won(r.amount) + '\n'
+      + '6. 입금희망일 : ' + (fmtDW(r.wishDate) || '') + '\n'
+      + '7. 요청 사유 : ' + (r.reason || '') + '\n'
+      + '8. 회수 계획 : ' + (r.plan || '') + '\n\n확인 부탁드립니다.';
+    modal('잔디 보고문 — ' + (r.mgrName || '') + ' 소장', '<textarea id="lnMsg" rows="18" style="width:100%;font-family:inherit;font-size:13px;line-height:1.6;padding:10px;box-sizing:border-box;">' + esc(t) + '</textarea><div class="ln-note">빈칸은 채워서 잔디에 붙여넣으세요.</div>',
+      '<button class="btn btn-outline" onclick="LN.closeModal()">닫기</button><button class="btn btn-primary" onclick="LN.copyMsg()">복사</button>');
+  }
+  function approveReq(id) {
+    var r = st.requests[id]; if (!r) return;
+    var m = (data.managers || []).filter(function (x) { return x && x.id === r.mgrId; })[0];
+    openForm(null, { borrower: r.mgrName, useSite: r.siteName, sourceSite: r.siteName, contractor: r.contractor, amount: r.amount, wishDate: r.wishDate,
+      loanDate: validDate(r.wishDate) ? r.wishDate : today(), progressNote: r.progress ? '공정률 ' + r.progress + '%' : '', repayPlan: r.plan,
+      purpose: r.reason, memo: '소장님 차용 신청(' + fmtDT(r.createdAt) + ')' + (r.account ? ' · 받을 계좌: ' + r.account : ''), reqId: id, phone: m && m.phone || undefined });
+  }
+  function rejectReq(id) {
+    var r = st.requests[id]; if (!r) return;
+    var why = prompt('반려 사유를 적어주세요 (소장님 화면에 보입니다)', ''); if (why === null) return;
+    saveReq(Object.assign({}, r, { status: '반려', rejectReason: why, decidedAt: new Date().toISOString(), decidedBy: who() })).then(function (ok) { if (ok) msg('반려했습니다'); });
+  }
+
+  // ── 관리자 알람: 차용 탭 숫자 + 새 신청 알림창 ──
+  function seenSet() { try { return JSON.parse(localStorage.getItem('ln_req_seen') || '{}'); } catch (e) { return {}; } }
+  function markReqSeen() { var s = seenSet(); rPending().forEach(function (r) { s[r.id] = 1; }); try { localStorage.setItem('ln_req_seen', JSON.stringify(s)); } catch (e) {} var p = document.getElementById('lnReqPop'); if (p) p.remove(); }
+  function updateReqAlarm() {
+    var btn = document.getElementById('loansTabBtn'); if (!btn) return;
+    var pend = allowed() ? rPending() : [];
+    var b = document.getElementById('lnReqBadge');
+    if (pend.length) {
+      if (!b) { b = document.createElement('span'); b.id = 'lnReqBadge'; b.className = 'badge badge-danger'; b.style.cssText = 'margin-left:4px;padding:1px 6px;'; btn.appendChild(b); }
+      b.textContent = pend.length;
+    } else if (b) b.remove();
+    var seen = seenSet(), fresh = pend.filter(function (r) { return !seen[r.id]; });
+    var onReq = !document.getElementById('loansTab').classList.contains('hidden') && st.view === 'requests';
+    if (onReq && fresh.length) { markReqSeen(); return; }
+    var p = document.getElementById('lnReqPop');
+    if (!fresh.length) { if (p) p.remove(); return; }
+    if (!p) { p = document.createElement('div'); p.id = 'lnReqPop'; document.body.appendChild(p); }
+    p.style.cssText = 'position:fixed;top:64px;right:16px;width:320px;max-width:calc(100vw - 32px);background:#fff;border:1px solid var(--border);border-radius:10px;box-shadow:0 12px 32px rgba(0,0,0,.18);z-index:9999;overflow:hidden;font-size:13px;';
+    var last = fresh[fresh.length - 1];
+    p.innerHTML = '<div style="display:flex;justify-content:space-between;align-items:center;padding:10px 14px;border-bottom:1px solid #eee;"><b>🔔 새 차용 신청 ' + fresh.length + '건</b><button type="button" aria-label="닫기" onclick="LN.markReqSeen()" style="border:none;background:none;font-size:18px;cursor:pointer;line-height:1;">×</button></div>'
+      + '<div style="padding:12px 14px;background:#fffbeb;line-height:1.6;"><div>' + esc(last.mgrName) + ' 소장 · ' + esc(last.siteName || '') + '</div><div style="font-weight:700;">' + won(last.amount) + (last.wishDate ? ' · 입금 희망 ' + esc(fmtDW(last.wishDate)) : '') + '</div>'
+      + (fresh.length > 1 ? '<div class="ln-note">외 ' + (fresh.length - 1) + '건</div>' : '')
+      + '<button type="button" class="btn btn-primary btn-sm" style="margin-top:8px;" onclick="LN.goReq()">확인하러 가기</button></div>';
+  }
+  function goReq() { st.view = 'requests'; showTab('loans'); markReqSeen(); }
+
   install();
   return { setView: setView, openForm: openForm, autoDue: autoDue, recheck: recheck, submitForm: submitForm, removeLoan: removeLoan, formToQueue: formToQueue,
     openDetail: openDetail, delSub: delSub, openRepay: openRepay, submitRepay: submitRepay, openExtend: openExtend, exCheck: exCheck, submitExtend: submitExtend,
@@ -10074,6 +10269,7 @@ var LN = (function () {
     openSettings: openSettings, submitSettings: submitSettings, resetSettings: resetSettings, exportXlsx: exportXlsx, importXlsx: importXlsx, undoImport: undoImport,
     printRules: printRules, openDoc: openDoc, copyDoc: copyDoc, copyText: copyText, _docTitle: docTitle, toggleSel: toggleSel, selAll: selAll, _sel: selIds,
     fillBorrower: fillBorrower, extReport: extReport, _extBack: extBack, ownerToggle: ownerToggle, printContract: printContract, openFormPdf: openFormPdf,
+    reqSiteInfo: reqSiteInfo, reqPlanToggle: reqPlanToggle, submitReq: submitReq, cancelReq: cancelReq, reqReport: reqReport, approveReq: approveReq, rejectReq: rejectReq, markReqSeen: markReqSeen, goReq: goReq,
     toggleMask: toggleMask, setFilterView: setFilterView, setYear: setYear, setFilter: setFilter, setQ: setQ, closeModal: closeModal, render: render,
     _test: { st: st, list: list, metrics: metrics, budget: budget, todos: todos, checks: checks, korAmt: korAmt } };
 })();
