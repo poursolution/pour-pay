@@ -3622,12 +3622,12 @@ function renderSiteInfoTab(s, assigns) {
         <div class="card">
             <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; margin-bottom:12px;">
                 <div style="padding:8px; background:#f8fafc; border-radius:5px;"><div style="font-size:10px; color:var(--text-light);">착공일</div><div style="font-weight:600; font-size:12px;">${s.startDate || '-'}</div></div>
-                <div style="padding:8px; background:#f8fafc; border-radius:5px;"><div style="font-size:10px; color:var(--text-light);">준공일</div><input type="date" value="${s.endDate || ''}" onchange="updateStatusDate('${s.id}', 'endDate', this.value)" style="font-weight:600; font-size:12px; border:1px solid var(--border); border-radius:4px; padding:3px;"></div>
+                <div style="padding:8px; background:#f8fafc; border-radius:5px;"><div style="font-size:10px; color:var(--text-light);">준공일</div><input type="date" value="${s.endDate || ''}" onchange="updateStatusDate('${s.id}', 'endDate', this.value)" style="font-weight:600; font-size:12px; border:1px solid var(--border); border-radius:4px; padding:3px;" ${currentUser && currentUser.role !== 'admin' ? 'disabled title="관리자만 수정할 수 있습니다"' : ''}></div>
                 ${s.siteManagerName ? `<div style="padding:8px; background:#f8fafc; border-radius:5px;"><div style="font-size:10px; color:var(--text-light);">현장 담당자</div><div style="font-weight:600; font-size:12px;">${s.siteManagerName}</div></div>` : ''}
                 <div style="padding:8px; background:#f8fafc; border-radius:5px;">
                     <div style="font-size:10px; color:var(--text-light);">공정률</div>
                     <div style="display:flex; align-items:center; gap:4px;">
-                        <input type="number" value="${s.progress || 0}" min="0" max="100" style="width:50px; padding:3px; border:1px solid var(--border); border-radius:3px; font-size:12px;" onchange="updateProgress('${s.id}', this.value)">
+                        <input type="number" value="${s.progress || 0}" min="0" max="100" style="width:50px; padding:3px; border:1px solid var(--border); border-radius:3px; font-size:12px;" onchange="updateProgress('${s.id}', this.value)" ${currentUser && currentUser.role !== 'admin' ? 'disabled title="관리자만 수정할 수 있습니다"' : ''}>
                         <span style="font-weight:700; color:var(--accent); font-size:12px;">%</span>
                     </div>
                 </div>
@@ -4007,6 +4007,20 @@ function renderPaymentTab(s) {
     const showConsulting = sType !== 'direct';
 
     return `
+        <div class="card" style="padding-bottom:4px;">
+            <div style="display:grid; grid-template-columns:repeat(auto-fit, minmax(120px, 1fr)); gap:8px; margin-bottom:12px;">
+                <div style="padding:8px; background:#f8fafc; border-radius:5px;"><div style="font-size:10px; color:var(--text-light);">착공일</div><div style="font-weight:600; font-size:12px;">${s.startDate || '-'}</div></div>
+                <div style="padding:8px; background:#f8fafc; border-radius:5px;"><div style="font-size:10px; color:var(--text-light);">준공일</div><div style="font-weight:600; font-size:12px;">${s.endDate || '-'}</div></div>
+                ${s.siteManagerName ? `<div style="padding:8px; background:#f8fafc; border-radius:5px;"><div style="font-size:10px; color:var(--text-light);">현장 담당자</div><div style="font-weight:600; font-size:12px;">${s.siteManagerName}</div></div>` : ''}
+                <div style="padding:8px; background:#f8fafc; border-radius:5px;">
+                    <div style="font-size:10px; color:var(--text-light);">공정률</div>
+                    <div style="display:flex; align-items:center; gap:4px;">
+                        <span style="font-weight:600; font-size:12px;">${s.progress || 0}</span>
+                        <span style="font-weight:700; color:var(--accent); font-size:12px;">%</span>
+                    </div>
+                </div>
+            </div>
+        </div>
         <div class="card">
             <div class="card-header"><div class="card-title">💰 금액 계산</div></div>
 
@@ -10107,7 +10121,8 @@ var LN = (function () {
       + '<label ' + lb + ' for="lnRqAmt">요청 금액</label>'
       + '<div style="display:flex;align-items:center;gap:6px;"><input id="lnRqAmt" inputmode="numeric" oninput="formatCurrency(this)" placeholder="0" ' + fs.replace('padding:0 10px;', 'padding:0 10px;font-weight:700;font-size:16px;') + '><span style="color:var(--text-light);">원</span></div>'
       + '<label ' + lb + ' for="lnRqWish">입금 희망일</label>'
-      + '<input id="lnRqWish" type="date" ' + fs + '>'
+      + '<input id="lnRqWish" type="date" min="' + wishMin() + '" onchange="LN.reqWishCheck()" ' + fs + '>'
+      + '<div style="font-size:11px;color:var(--text-light);margin-top:4px;">' + esc(fmtDW(wishMin())) + '부터 선택할 수 있습니다 (주말·공휴일 빼고 2일 뒤 · 오후 6시 이후 신청은 3일 뒤부터)</div>'
       + '<label ' + lb + ' for="lnRqReason">요청 사유</label>'
       + '<textarea id="lnRqReason" rows="3" placeholder="ex) 중도금 수령이 이번달 말로 그 전 운영자금이 필요하여 차용요청" style="width:100%;border:1px solid var(--border);border-radius:6px;padding:10px;font-size:14px;font-family:inherit;box-sizing:border-box;resize:vertical;"></textarea>'
       + '<label ' + lb + ' for="lnRqPlan">상환 계획</label>'
@@ -10151,6 +10166,22 @@ var LN = (function () {
     var chip = function (t) { return '<span style="font-size:12px;background:#f4f4f1;border-radius:6px;padding:4px 8px;color:#404040;">' + esc(t) + '</span>'; };
     box.innerHTML = s ? (s.contractor ? chip('시공사 ' + s.contractor) : '') + (s.progress ? chip('공정률 ' + s.progress + '%') : '') : '';
   }
+  // 입금 희망일: 주말·공휴일 빼고 신청일 2영업일 뒤부터, 오후 6시 이후 신청은 3영업일 뒤부터 (2026-11-09)
+  var KR_HOLIDAYS = {
+    '2026-01-01':1,'2026-02-16':1,'2026-02-17':1,'2026-02-18':1,'2026-03-01':1,'2026-03-02':1,'2026-05-01':1,'2026-05-05':1,'2026-05-24':1,'2026-05-25':1,
+    '2026-06-03':1,'2026-06-06':1,'2026-07-17':1,'2026-08-15':1,'2026-08-17':1,'2026-09-24':1,'2026-09-25':1,'2026-09-26':1,'2026-10-03':1,'2026-10-05':1,'2026-10-09':1,'2026-12-25':1,
+    '2027-01-01':1,'2027-02-06':1,'2027-02-07':1,'2027-02-08':1,'2027-02-09':1,'2027-03-01':1,'2027-05-01':1,'2027-05-03':1,'2027-05-05':1,'2027-05-13':1,
+    '2027-06-06':1,'2027-07-17':1,'2027-07-19':1,'2027-08-15':1,'2027-08-16':1,'2027-09-14':1,'2027-09-15':1,'2027-09-16':1,'2027-10-03':1,'2027-10-04':1,'2027-10-09':1,'2027-10-11':1,'2027-12-25':1,'2027-12-27':1
+  };
+  function ymd(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
+  function isBizDay(str) { if (!validDate(str)) return false; var p = str.split('-'), d = new Date(+p[0], +p[1] - 1, +p[2]), w = d.getDay(); return w !== 0 && w !== 6 && !KR_HOLIDAYS[str]; }
+  function wishMin() { var d = new Date(), n = d.getHours() >= 18 ? 3 : 2; while (n > 0) { d.setDate(d.getDate() + 1); if (isBizDay(ymd(d))) n--; } return ymd(d); }
+  function wishOk(v) { return v && v >= wishMin() && isBizDay(v); }
+  function reqWishCheck() {
+    var e = document.getElementById('lnRqWish'); if (!e || !e.value) return;
+    if (e.value < wishMin()) { msg('입금 희망일은 ' + fmtDW(wishMin()) + '부터 선택할 수 있습니다'); e.value = ''; }
+    else if (!isBizDay(e.value)) { msg('주말과 공휴일은 입금 희망일로 고를 수 없습니다'); e.value = ''; }
+  }
   function reqPlanToggle() { var p = document.getElementById('lnRqPlan'), e = document.getElementById('lnRqPlanEtc'); if (p && e) e.style.display = p.value === '__etc' ? '' : 'none'; }
   function submitReq() {
     var u = me(); if (!u) return;
@@ -10164,6 +10195,8 @@ var LN = (function () {
     if (!r.siteName) { msg('현장을 선택하세요'); return; }
     if (!r.amount) { msg('요청 금액을 입력하세요'); return; }
     if (!validDate(r.wishDate)) { msg('입금 희망일을 선택하세요'); return; }
+    if (r.wishDate < wishMin()) { msg('입금 희망일은 ' + fmtDW(wishMin()) + '부터 선택할 수 있습니다'); return; }
+    if (!isBizDay(r.wishDate)) { msg('주말과 공휴일은 입금 희망일로 고를 수 없습니다'); return; }
     if (!r.reason) { msg('요청 사유를 적어주세요'); return; }
     if (!r.plan) { msg('상환 계획을 적어주세요'); return; }
     if (!confirm(r.siteName + '\n' + won(r.amount) + ' 차용 신청할까요?')) return;
@@ -10303,7 +10336,7 @@ var LN = (function () {
     printRules: printRules, openDoc: openDoc, copyDoc: copyDoc, copyText: copyText, _docTitle: docTitle, toggleSel: toggleSel, selAll: selAll, _sel: selIds,
     fillBorrower: fillBorrower, extReport: extReport, _extBack: extBack, ownerToggle: ownerToggle, printContract: printContract, openFormPdf: openFormPdf,
     openNotify: openNotify, saveNotify: saveNotify, testNotify: testNotify,
-    reqSiteInfo: reqSiteInfo, reqPlanToggle: reqPlanToggle, submitReq: submitReq, cancelReq: cancelReq, reqReport: reqReport, approveReq: approveReq, rejectReq: rejectReq, markReqSeen: markReqSeen, goReq: goReq,
+    reqWishCheck: reqWishCheck, reqSiteInfo: reqSiteInfo, reqPlanToggle: reqPlanToggle, submitReq: submitReq, cancelReq: cancelReq, reqReport: reqReport, approveReq: approveReq, rejectReq: rejectReq, markReqSeen: markReqSeen, goReq: goReq,
     toggleMask: toggleMask, setFilterView: setFilterView, setYear: setYear, setFilter: setFilter, setQ: setQ, closeModal: closeModal, render: render,
     _test: { st: st, list: list, metrics: metrics, budget: budget, todos: todos, checks: checks, korAmt: korAmt } };
 })();
