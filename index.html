@@ -8696,7 +8696,7 @@ var LN = (function () {
     extendNoticeDays: 3,                 // 연장 신청 기한 (상환일 n일 전)
     repayAccount: '기업은행 468-084895-04-017 (예금주 주식회사 넷폼)'
   };
-  var st = { loans: {}, queue: {}, requests: {}, settings: Object.assign({}, DEFAULTS), loaded: false, listening: false,
+  var st = { loans: {}, queue: {}, requests: {}, notify: {}, settings: Object.assign({}, DEFAULTS), loaded: false, listening: false,
              view: 'summary', year: String(new Date().getFullYear()), filter: 'active', q: '', mask: false, error: '' };
   try { st.mask = localStorage.getItem('ln_mask') === '1'; } catch (e) {}
 
@@ -8871,7 +8871,7 @@ var LN = (function () {
     st.listening = true;
     ref().on('value', function (snap) {
       var v = snap.val() || {};
-      st.loans = v.loans || {}; st.queue = v.queue || {}; st.requests = v.requests || {};
+      st.loans = v.loans || {}; st.queue = v.queue || {}; st.requests = v.requests || {}; st.notify = v.notify || {};
       st.settings = Object.assign({}, DEFAULTS, v.settings || {});
       st.loaded = true; st.error = ''; render(); mgrInject(); updateReqAlarm();
     }, function (e) { st.listening = false; st.loaded = true; fail(e); });
@@ -10167,7 +10167,7 @@ var LN = (function () {
     if (!r.reason) { msg('요청 사유를 적어주세요'); return; }
     if (!r.plan) { msg('상환 계획을 적어주세요'); return; }
     if (!confirm(r.siteName + '\n' + won(r.amount) + ' 차용 신청할까요?')) return;
-    saveReq(r).then(function (ok) { if (ok) { msg('차용 신청이 접수됐습니다'); window.scrollTo(0, 0); } else { delete st.requests[r.id]; mgrInject(); msg('⚠️ 신청이 저장되지 않았습니다. 담당자에게 연락해 주세요.'); } });
+    saveReq(r).then(function (ok) { if (ok) { msg('차용 신청이 접수됐습니다'); window.scrollTo(0, 0); sendNotify(r); } else { delete st.requests[r.id]; mgrInject(); msg('⚠️ 신청이 저장되지 않았습니다. 담당자에게 연락해 주세요.'); } });
   }
   function cancelReq(id) {
     var r = st.requests[id], u = me(); if (!r || r.status !== '대기') return;
@@ -10184,7 +10184,10 @@ var LN = (function () {
   function vRequests() {
     var pend = rPending(), done = rList().filter(function (r) { return r.status !== '대기'; }).sort(function (a, b) { return (b.decidedAt || b.createdAt || '').localeCompare(a.decidedAt || a.createdAt || ''); });
     markReqSeen();
-    var h = '';
+    var nf = st.notify || {};
+    var h = '<div class="card" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:12px 16px;"><b style="font-size:13px;">🔔 잔디 · 메일 알림</b>'
+      + (nf.url ? '<span class="badge badge-success">연결됨</span><span class="ln-note">소장님이 신청하면 잔디로 바로 알림이 갑니다</span>' : '<span class="badge badge-warning">미연결</span><span class="ln-note">관리자 화면을 열어 두지 않아도 알 수 있게 연결해 두세요</span>')
+      + '<button class="btn btn-outline btn-sm" style="margin-left:auto;" onclick="LN.openNotify()">알림 설정</button></div>';
     var cell = function (k, v) { return '<div style="background:#f7f7f4;border-radius:6px;padding:10px 12px;"><div style="font-size:11px;color:var(--text-light);">' + k + '</div><div style="margin-top:2px;font-weight:600;line-height:1.5;">' + v + '</div></div>'; };
     h += pend.length ? pend.map(function (r) {
       var prev = list().filter(function (l) { return (l.managerId && l.managerId === r.mgrId) || key(l.borrower) === key(r.mgrName); });
@@ -10262,6 +10265,36 @@ var LN = (function () {
   }
   function goReq() { st.view = 'requests'; showTab('loans'); markReqSeen(); }
 
+  // ── 잔디 · 메일 알림 (구글 Apps Script 경유, 2026-11-08) ──
+  function sendNotify(r, test) {
+    var n = st.notify || {}; if (!n.url) return Promise.resolve(false);
+    var p = test ? { test: true } : { mgrName: r.mgrName, siteName: r.siteName, contractor: r.contractor, amount: r.amount, wishDate: r.wishDate, reason: r.reason, plan: r.plan, createdAt: r.createdAt };
+    p.key = n.key || '';
+    try {
+      return fetch(n.url, { method: 'POST', mode: 'no-cors', headers: { 'Content-Type': 'text/plain;charset=utf-8' }, body: JSON.stringify(p) }).then(function () { return true; }).catch(function () { return false; });
+    } catch (e) { return Promise.resolve(false); }
+  }
+  function openNotify() {
+    var n = st.notify || {};
+    modal('잔디 · 메일 알림 설정', '<div class="ln-alert">구글 Apps Script를 배포하고 나온 <b>웹 앱 URL</b>과 <b>확인용 키</b>를 넣으세요. 소장님이 차용 신청을 하면 이 주소로 알림을 보내고, Apps Script가 잔디(와 하이웍스 메일)로 전달합니다.</div>'
+      + fg('웹 앱 URL', inp('lnNfUrl', n.url || '', 'placeholder="https://script.google.com/macros/s/.../exec"'))
+      + fg('확인용 키', inp('lnNfKey', n.key || '', 'placeholder="pour-..."'))
+      + '<div class="ln-note">저장 후 [테스트 알림]을 누르면 잔디방에 테스트 메시지가 갑니다.</div>',
+      '<button class="btn btn-outline" style="margin-right:auto" onclick="LN.testNotify()">테스트 알림</button><button class="btn btn-outline" onclick="LN.closeModal()">닫기</button><button class="btn btn-primary" onclick="LN.saveNotify()">저장</button>');
+  }
+  function saveNotify() {
+    var o = { url: String(val('lnNfUrl') || '').trim(), key: String(val('lnNfKey') || '').trim() };
+    if (o.url && !/^https:\/\/script\.google\.com\//.test(o.url)) { msg('웹 앱 URL은 https://script.google.com/ 으로 시작해야 합니다'); return; }
+    st.notify = o; render();
+    ref('notify').set(clean(o)).then(function () { msg(o.url ? '알림 설정을 저장했습니다' : '알림 연결을 해제했습니다'); }).catch(fail);
+  }
+  function testNotify() {
+    var o = { url: String(val('lnNfUrl') || '').trim(), key: String(val('lnNfKey') || '').trim() };
+    if (!o.url) { msg('웹 앱 URL을 먼저 넣으세요'); return; }
+    var keep = st.notify; st.notify = o;
+    sendNotify(null, true).then(function (ok) { st.notify = keep; msg(ok ? '테스트 알림을 보냈습니다. 잔디방을 확인하세요' : '보내지 못했습니다. URL을 확인하세요'); });
+  }
+
   install();
   return { setView: setView, openForm: openForm, autoDue: autoDue, recheck: recheck, submitForm: submitForm, removeLoan: removeLoan, formToQueue: formToQueue,
     openDetail: openDetail, delSub: delSub, openRepay: openRepay, submitRepay: submitRepay, openExtend: openExtend, exCheck: exCheck, submitExtend: submitExtend,
@@ -10269,6 +10302,7 @@ var LN = (function () {
     openSettings: openSettings, submitSettings: submitSettings, resetSettings: resetSettings, exportXlsx: exportXlsx, importXlsx: importXlsx, undoImport: undoImport,
     printRules: printRules, openDoc: openDoc, copyDoc: copyDoc, copyText: copyText, _docTitle: docTitle, toggleSel: toggleSel, selAll: selAll, _sel: selIds,
     fillBorrower: fillBorrower, extReport: extReport, _extBack: extBack, ownerToggle: ownerToggle, printContract: printContract, openFormPdf: openFormPdf,
+    openNotify: openNotify, saveNotify: saveNotify, testNotify: testNotify,
     reqSiteInfo: reqSiteInfo, reqPlanToggle: reqPlanToggle, submitReq: submitReq, cancelReq: cancelReq, reqReport: reqReport, approveReq: approveReq, rejectReq: rejectReq, markReqSeen: markReqSeen, goReq: goReq,
     toggleMask: toggleMask, setFilterView: setFilterView, setYear: setYear, setFilter: setFilter, setQ: setQ, closeModal: closeModal, render: render,
     _test: { st: st, list: list, metrics: metrics, budget: budget, todos: todos, checks: checks, korAmt: korAmt } };
