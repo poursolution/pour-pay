@@ -10121,8 +10121,8 @@ var LN = (function () {
       + '<label ' + lb + ' for="lnRqAmt">요청 금액</label>'
       + '<div style="display:flex;align-items:center;gap:6px;"><input id="lnRqAmt" inputmode="numeric" oninput="formatCurrency(this)" placeholder="0" ' + fs.replace('padding:0 10px;', 'padding:0 10px;font-weight:700;font-size:16px;') + '><span style="color:var(--text-light);">원</span></div>'
       + '<label ' + lb + ' for="lnRqWish">입금 희망일</label>'
-      + '<input id="lnRqWish" type="date" min="' + wishMin() + '" onchange="LN.reqWishCheck()" ' + fs + '>'
-      + '<div style="font-size:11px;color:var(--text-light);margin-top:4px;">' + esc(fmtDW(wishMin())) + '부터 선택할 수 있습니다 (주말·공휴일 빼고 2일 뒤 · 오후 6시 이후 신청은 3일 뒤부터)</div>'
+      + '<select id="lnRqWish" onchange="LN.reqWishCheck()" ' + fs + '><option value="">입금 희망일을 선택하세요</option>' + wishOptions().map(function (d) { return '<option value="' + d + '">' + esc(fmtDW(d)) + '</option>'; }).join('') + '</select>'
+      + '<div style="font-size:11px;color:var(--text-light);margin-top:4px;">' + esc(fmtDW(wishMin())) + '부터 고를 수 있어요 (신청일 2일 뒤 · 오후 6시 이후는 3일 뒤 · 주말·공휴일 제외)</div>'
       + '<label ' + lb + ' for="lnRqReason">요청 사유</label>'
       + '<textarea id="lnRqReason" rows="3" placeholder="ex) 중도금 수령이 이번달 말로 그 전 운영자금이 필요하여 차용요청" style="width:100%;border:1px solid var(--border);border-radius:6px;padding:10px;font-size:14px;font-family:inherit;box-sizing:border-box;resize:vertical;"></textarea>'
       + '<label ' + lb + ' for="lnRqPlan">상환 계획</label>'
@@ -10176,6 +10176,7 @@ var LN = (function () {
   function ymd(d) { return d.getFullYear() + '-' + pad(d.getMonth() + 1) + '-' + pad(d.getDate()); }
   function isBizDay(str) { if (!validDate(str)) return false; var p = str.split('-'), d = new Date(+p[0], +p[1] - 1, +p[2]), w = d.getDay(); return w !== 0 && w !== 6 && !KR_HOLIDAYS[str]; }
   function wishMin() { var d = new Date(), n = d.getHours() >= 18 ? 3 : 2; while (n > 0) { d.setDate(d.getDate() + 1); if (isBizDay(ymd(d))) n--; } return ymd(d); }
+  function wishOptions() { var out = [], p = wishMin().split('-'), d = new Date(+p[0], +p[1] - 1, +p[2]); while (out.length < 30) { var k = ymd(d); if (isBizDay(k)) out.push(k); d.setDate(d.getDate() + 1); } return out; }
   function wishOk(v) { return v && v >= wishMin() && isBizDay(v); }
   function reqWishCheck() {
     var e = document.getElementById('lnRqWish'); if (!e || !e.value) return;
